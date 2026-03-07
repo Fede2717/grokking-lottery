@@ -1,0 +1,23 @@
+# configs/training/default.yaml
+# ==============================
+# Optimiser and training loop configuration.
+# Weight decay is the PRIMARY causal lever for grokking speed (Liu et al. 2023).
+# Use Hydra sweeps to vary weight_decay for Experiment C.
+
+# AdamW hyperparameters (Power et al. 2022)
+lr:           1.0e-3
+weight_decay: 1.0e-3     # λ — key experimental variable
+beta1:        0.9
+beta2:        0.98
+
+# Training duration
+n_grok_steps: 50000      # main grokking phase steps; 50k is reliable for p=97 add
+log_every:    100        # eval + metric logging frequency (steps)
+
+# Grokking detection thresholds
+grok_threshold:  0.95    # val_acc required to register grokking event
+mem_threshold:   0.99    # train_acc required to register memorisation event
+grok_window:     3       # consecutive evals above threshold before event fires
+
+# Gradient clipping
+max_grad_norm: 1.0

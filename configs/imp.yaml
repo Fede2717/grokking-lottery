@@ -1,0 +1,31 @@
+# configs/pruning/imp.yaml
+# =========================
+# Iterative Magnitude Pruning (IMP) configuration.
+# One-shot pruning uses the same target_sparsities list as an ablation.
+
+method: "imp"            # "imp" (primary) | "one_shot" (ablation)
+
+# Sparsity levels evaluated in Experiment B.
+# Each level = one full IMP + grokking run.
+# Sweep example: python ... pruning.target_sparsities="[0.5,0.9,0.95]"
+target_sparsities:
+  - 0.0     # dense baseline
+  - 0.2
+  - 0.5
+  - 0.7
+  - 0.8
+  - 0.9
+  - 0.95
+
+# IMP schedule
+prune_rate_per_round: 0.20   # fraction of ACTIVE weights pruned per round
+                              # 20% per round → 6 rounds to reach 73.8% sparsity
+imp_steps_per_round:  2000   # gradient steps for short training between rounds
+
+# Rewinding strategy (canonical LTH)
+rewind_to_init: true         # True = rewind to W_0 (step 0 weights on disk)
+                             # False = rewind to W_warm (early checkpoint)
+
+# Fourier analysis at checkpoints (light version — key events only)
+compute_fourier: true
+fourier_top_k:  5            # dominant frequencies to report

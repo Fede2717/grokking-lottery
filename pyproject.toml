@@ -1,0 +1,76 @@
+[build-system]
+requires      = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name        = "grokking-lottery"
+version     = "0.1.0"
+description = "Grokking × Lottery Ticket Hypothesis: Can a sparse sub-network grok?"
+readme      = "README.md"
+license     = { text = "MIT" }
+requires-python = ">=3.10"
+
+dependencies = [
+    # Deep learning core
+    "torch>=2.1.0",
+    "torchvision>=0.16.0",
+
+    # Scientific computing
+    "numpy>=1.26.0",
+    "scipy>=1.11.0",
+    "pandas>=2.1.0",
+
+    # Experiment orchestration
+    "hydra-core>=1.3.2",
+    "omegaconf>=2.3.0",
+
+    # Experiment tracking
+    "wandb>=0.16.0",
+
+    # Visualisation
+    "matplotlib>=3.8.0",
+    "seaborn>=0.13.0",
+
+    # Utilities
+    "tqdm>=4.66.0",
+    "einops>=0.7.0",
+    "rich>=13.7.0",        # pretty terminal output
+    "hatch>=1.7.0",        # Aggiunto per il build system
+    "hatchling>=1.18.0",   # Aggiunto per il build system
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-cov>=4.1.0",
+    "ruff>=0.1.0",
+    "mypy>=1.7.0",
+]
+
+# ── uv configuration ──────────────────────────────────────────────────────────
+[tool.uv]
+# Pin the exact index to guarantee reproducibility across machines
+index-url  = "https://pypi.org/simple"
+# Use --resolution=lowest-direct in CI for strict lower-bound testing
+
+[tool.uv.sources]
+# Force CUDA 12.1 wheel for PyTorch on Kaggle T4 (CUDA 12.x driver)
+# Uncomment when running on Kaggle; comment out for CPU-only dev machines.
+# torch = { url = "https://download.pytorch.org/whl/cu121" }
+
+# ── Hatch build ───────────────────────────────────────────────────────────────
+[tool.hatch.build.targets.wheel]
+packages = ["src", "experiments"]
+
+# ── Ruff linter ───────────────────────────────────────────────────────────────
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+select  = ["E", "F", "W", "I"]
+ignore  = ["E501"]    # line length handled by formatter
+
+# ── mypy ──────────────────────────────────────────────────────────────────────
+[tool.mypy]
+python_version         = "3.10"
+ignore_missing_imports = true
+warn_unused_ignores    = true

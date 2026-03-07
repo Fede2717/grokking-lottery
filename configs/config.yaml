@@ -1,0 +1,46 @@
+# configs/config.yaml
+# ====================
+# Root Hydra configuration for the Grokking × LTH project.
+# All sub-configs are composed via the defaults list.
+#
+# Usage:
+#   python -m experiments.exp_b_lth_then_grok              # defaults
+#   python -m experiments.exp_b_lth_then_grok training.weight_decay=1e-2
+#   python -m experiments.exp_b_lth_then_grok --multirun pruning.target_sparsities="[0.5,0.9]"
+
+defaults:
+  - dataset:    modular_add
+  - model:      small_transformer
+  - training:   default
+  - pruning:    imp
+  - experiment: exp_b
+  - _self_           # allows root-level overrides
+
+# ── Top-level execution control ───────────────────────────────────────────────
+seed:        42
+num_seeds:   5          # number of independent seeds for CI plots
+results_dir: "results"
+use_amp:     true       # automatic mixed precision (T4 supports fp16)
+device:      "auto"     # "auto" | "cuda" | "cpu"
+
+# ── Weights & Biases ──────────────────────────────────────────────────────────
+wandb:
+  enabled:   true
+  project:   "grokking-lottery"
+  entity:    null        # set to your W&B username / team
+  group:     null        # auto-set per experiment if null
+  tags:      []
+  log_every: 100         # log to W&B every N steps (should match training.log_every)
+  # Advanced metric logging intervals (expensive — run less frequently)
+  hessian_every:  5000   # steps between Hessian eigenvalue estimates
+  fourier_every:  1000   # steps between full Fourier spectrum logs
+
+# ── Reproducibility ───────────────────────────────────────────────────────────
+# CRITICAL: initial model weights are saved to disk at step 0.
+# IMP rewinding loads from this file — never from an in-memory dict.
+checkpoint:
+  save_init:       true
+  init_filename:   "init_weights.pt"    # relative to run output dir
+  save_on_grok:    true
+  save_on_mem:     true
+  save_final:      true
