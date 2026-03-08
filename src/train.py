@@ -194,13 +194,13 @@ class TrainingHistory:
 # W&B helper
 # ===========================================================================
 
-def init_wandb(cfg: dict, run_name: str, group: str | None = None) -> bool:
+def init_wandb(cfg_dict: dict, run_name: str, group: str | None = None) -> bool:
     """Initialise a W&B run from a flat/nested config dict."""
     if not _WANDB_AVAILABLE:
         print("  [W&B] Not installed — skipping. Run: pip install wandb")
         return False
 
-    wb = cfg.get("wandb", {})
+    wb = cfg_dict.get("wandb", {})
     if not wb.get("enabled", False):
         return False
 
@@ -208,9 +208,9 @@ def init_wandb(cfg: dict, run_name: str, group: str | None = None) -> bool:
         project = wb.get("project", "grokking-lottery"),
         entity  = wb.get("entity",  None),
         name    = run_name,
-        group   = group or cfg.get("experiment", {}).get("name", "default"),
+        group   = group or cfg_dict.get("experiment", {}).get("name", "default"),
         tags    = list(wb.get("tags", [])),
-        config  = cfg,
+        config  = cfg_dict,
         resume  = "allow",
     )
     return True
