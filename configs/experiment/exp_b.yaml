@@ -1,0 +1,10 @@
+name:        "exp_b_lth_then_grok"
+description: "IMP lottery ticket discovery followed by full grokking phase"
+
+run_one_shot_ablation: true
+
+plots:
+  grokking_curves:      true
+  efficiency_frontier:  true
+  weight_norm_collapse: true
+  fourier_checkpoints:  true

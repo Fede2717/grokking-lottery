@@ -1,0 +1,7 @@
+name:        "exp_a_grok_then_prune"
+description: "Train dense model to grokking, then probe circuit survival under pruning"
+
+plots:
+  rewind_comparison:       true   # ← MUST be indented 2 spaces
+  post_grok_accuracy:      true
+  grokking_curves_rewound: true

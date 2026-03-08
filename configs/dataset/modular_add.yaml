@@ -1,0 +1,4 @@
+p:          97
+operation:  "add"
+train_frac: 0.5
+batch_size: 512

@@ -1,0 +1,19 @@
+name:        "exp_c_wd_ablation"
+description: "2D grid: weight_decay x sparsity — substitutes or complements?"
+
+wd_values:
+  - 1.0e-4
+  - 1.0e-3
+  - 5.0e-3
+  - 1.0e-2
+
+sparsity_values:
+  - 0.0
+  - 0.5
+  - 0.8
+  - 0.9
+
+plots:
+  heatmap_sg:        true
+  heatmap_val_acc:   true
+  wd_sparsity_lines: true
