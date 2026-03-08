@@ -204,6 +204,8 @@ def init_wandb(cfg_dict: dict, run_name: str, group: str | None = None) -> bool:
     if not wb.get("enabled", False):
         return False
 
+    entity = wb.get("entity") or os.environ.get("WANDB_ENTITY")
+
     _wandb.init(
         project = wb.get("project", "grokking-lottery"),
         entity  = wb.get("entity",  None),
