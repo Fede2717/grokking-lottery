@@ -209,7 +209,7 @@ def init_wandb(cfg_dict: dict, run_name: str, group: str | None = None) -> bool:
 
     _wandb.init(
         project = wb.get("project", "grokking-lottery"),
-        entity  = wb.get("entity",  None),
+        entity  = entity,
         name    = run_name,
         group   = group or cfg_dict.get("experiment", {}).get("name", "default"),
         tags    = list(wb.get("tags", [])),
