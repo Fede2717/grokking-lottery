@@ -1,310 +1,142 @@
 """
-experiments/exp_c_wd_ablation.py  (v2)
-========================================
-Experiment C — ABLATION: Weight Decay × Sparsity Grid
-======================================================
+experiments/exp_c_wd_ablation.py
+================================
+Experiment C — ABLATION: weight-decay × sparsity grid.
 
-v2: Hydra @hydra.main, W&B logging, disk checkpointing.
+Pruning method
+--------------
+This experiment uses ONE-SHOT MAGNITUDE PRUNING (never IMP). For each grid cell
+it does a short pretraining pass to give weights a magnitude ranking, prunes
+once to the target sparsity, rewinds to W_0, applies the mask, then runs the
+grokking phase.
 
-Usage
------
-    python -m experiments.exp_c_wd_ablation experiment=exp_c
+Weight-decay confound control
+------------------------------
+Weight decay is the variable under study, so it must not leak into the pruning
+step. The short pretraining (which only produces the magnitude ranking) uses
+weight_decay = 0 for ALL cells. The grid's weight-decay value is applied ONLY in
+the grokking phase. This isolates the effect of weight decay during
+generalization from any effect it would have on which weights get pruned.
+
+Mapping
+-------
+Tests whether weight decay and sparsity are substitutes or complements for
+closing the memorization→generalization gap. Plots are produced offline by
+analysis/plot_exp_c_heatmap.py from aggregate.csv (no TensorBoard/wandb needed).
 """
 
 from __future__ import annotations
 
-import json
-import os
 import sys
 from itertools import product
 from pathlib import Path
 
 import hydra
-import numpy as np
-import torch
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.data    import get_dataloaders
-from src.model   import get_model
-from src.prune   import (
-    make_empty_masks, one_shot_prune, compute_sparsity, rewind_weights,
-)
-from src.train   import (
-    Trainer, make_optimizer, TrainingHistory,
-    save_init_checkpoint, init_wandb,
-)
+from src.logging_utils import load_summary, summary_to_aggregate_row, write_aggregate_csv
 from src.metrics import compute_grokking_metrics
+from src.prune import compute_sparsity, make_empty_masks, one_shot_prune, rewind_weights
+from src.runner import (
+    build_dataloaders, build_model, build_optimizer, build_trainer, enable_utf8_stdout,
+    finish_wandb, maybe_init_wandb, resolve_device, resolve_seeds, seed_everything,
+)
+from src.train import save_init_checkpoint
 
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-
-try:
-    import wandb as _wandb
-    _WANDB_AVAILABLE = True
-except ImportError:
-    _WANDB_AVAILABLE = False
-
-
-# ===========================================================================
-# Single grid condition
-# ===========================================================================
 
 def run_condition(
-    cfg:             DictConfig,
-    weight_decay:    float,
+    cfg: DictConfig,
+    weight_decay: float,
     target_sparsity: float,
-    device:          torch.device,
-    seed:            int,
-    run_dir:         Path,
+    seed: int,
+    device,
+    exp_dir: Path,
 ) -> dict:
-    """Run one (λ, sparsity) cell and return a JSON-serialisable dict."""
-    torch.manual_seed(seed)
-    if device.type == "cuda":
-        torch.cuda.manual_seed_all(seed)
-
+    """Run one (weight_decay, sparsity) cell; return one aggregate row."""
+    run_dir = exp_dir / f"wd{weight_decay:.0e}_sp{target_sparsity:.2f}" / f"seed_{seed}"
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    train_loader, val_loader = get_dataloaders(
-        p=cfg.dataset.p, operation=cfg.dataset.operation,
-        train_frac=cfg.dataset.train_frac, batch_size=cfg.dataset.batch_size,
-        seed=cfg.seed,
-    )
-    model = get_model(
-        vocab_size=cfg.dataset.p + 2, n_classes=cfg.dataset.p,
-        d_model=cfg.model.d_model, n_heads=cfg.model.n_heads,
-        n_layers=cfg.model.n_layers, d_ff=cfg.model.d_ff,
-    ).to(device)
+    seed_everything(seed, device)
+    train_loader, val_loader = build_dataloaders(cfg, seed)
+    model = build_model(cfg, device)
+    init_ckpt = save_init_checkpoint(model, run_dir, cfg.checkpoint.init_filename)
+    is_baseline = target_sparsity == 0.0
 
-    # ── Strict init checkpoint ─────────────────────────────────────────────
-    init_ckpt_path = save_init_checkpoint(model, run_dir, "init_weights.pt")
-
-    wandb_cfg = OmegaConf.to_container(cfg.wandb, resolve=True)
-    run_name  = f"exp_c_wd{weight_decay:.0e}_sp{target_sparsity:.0%}_seed{seed}"
-    init_wandb(
-        cfg_dict={**OmegaConf.to_container(cfg, resolve=True),
-                  "override_weight_decay": weight_decay,
-                  "override_sparsity": target_sparsity},
-        run_name=run_name, group="exp_c_wd_sparsity",
-    )
-
-    # ── One-shot pruning (fast for grid search) ────────────────────────────
-    if target_sparsity > 0.0:
-        opt_short = make_optimizer(model, lr=cfg.training.lr,
-                                   weight_decay=weight_decay,
-                                   betas=(cfg.training.beta1, cfg.training.beta2))
-        trainer_short = Trainer(
-            model=model, train_loader=train_loader, val_loader=val_loader,
-            optimizer=opt_short, device=device,
-            run_dir=run_dir / "short_pretrain", p=cfg.dataset.p,
-            log_every=999999, compute_fourier=False,
-            use_amp=cfg.use_amp, wandb_cfg={"enabled": False},
+    # ── One-shot magnitude pruning with the WD confound removed ─────────────
+    # Short pretrain uses weight_decay=0 for EVERY cell (ranking only).
+    if not is_baseline:
+        short_opt = build_optimizer(cfg, model, weight_decay=0.0)
+        short_trainer = build_trainer(
+            cfg, model, train_loader, val_loader, short_opt, device,
+            run_dir / "short_pretrain", compute_fourier=False, logging_backend="none",
         )
-        trainer_short.train(
+        short_trainer.train(
             n_steps=cfg.pruning.imp_steps_per_round * 2,
             save_checkpoints=False, verbose=False,
         )
-        masks = one_shot_prune(model, init_ckpt_path, target_sparsity)
+        masks = one_shot_prune(model, init_ckpt, target_sparsity)
     else:
         masks = make_empty_masks(model)
-        rewind_weights(model, init_ckpt_path, masks)
-
+        rewind_weights(model, init_ckpt, masks)
     actual_sp = compute_sparsity(masks)
 
-    # ── Grokking phase (with overridden weight_decay) ──────────────────────
-    opt = make_optimizer(model, lr=cfg.training.lr,
-                         weight_decay=weight_decay,
-                         betas=(cfg.training.beta1, cfg.training.beta2))
-    trainer = Trainer(
-        model=model, train_loader=train_loader, val_loader=val_loader,
-        optimizer=opt, device=device,
-        run_dir=run_dir / "grok_phase", p=cfg.dataset.p,
-        log_every=cfg.training.log_every,
-        grok_threshold=cfg.training.grok_threshold,
-        mem_threshold=cfg.training.mem_threshold,
-        grok_window=cfg.training.grok_window,
-        compute_fourier=False,   # skip Fourier in grid — saves time
-        use_amp=cfg.use_amp,
-        wandb_cfg=wandb_cfg,
+    # ── Grokking phase: the grid weight_decay is applied ONLY here ──────────
+    grok_dir = run_dir / "grok_phase"
+    label = f"wd={weight_decay:.0e}_sp={target_sparsity:.0%}_seed={seed}"
+    wandb_run = maybe_init_wandb(cfg, run_name=label, group="exp_c_wd_sparsity")
+    grok_opt = build_optimizer(cfg, model, weight_decay=weight_decay)
+    trainer = build_trainer(
+        cfg, model, train_loader, val_loader, grok_opt, device, grok_dir,
+        is_baseline=is_baseline, compute_fourier=False, wandb_run=wandb_run,
     )
     history = trainer.train(
-        n_steps=cfg.training.n_grok_steps, masks=masks,
-        save_checkpoints=False, verbose=False,
+        n_steps=cfg.training.n_grok_steps,
+        masks=masks,
+        save_checkpoints=False,
+        verbose=False,
+        config_summary={
+            "experiment": "exp_c",
+            "method": "one_shot_magnitude",
+            "weight_decay": float(weight_decay),
+            "target_sparsity": target_sparsity,
+            "actual_sparsity": actual_sp,
+            "seed": seed,
+        },
     )
+    finish_wandb(wandb_run)
 
     gm = compute_grokking_metrics(history.to_dict())
-    result = {
-        "weight_decay"    : weight_decay,
-        "target_sparsity" : target_sparsity,
-        "actual_sparsity" : actual_sp,
-        "seed"            : seed,
-        **{k: gm[k] for k in ["grokked","grokking_step","grokking_gap",
-                                "final_val_acc","final_train_acc","memorization_step"]},
-    }
+    print(
+        f"  wd={weight_decay:.0e} sp={target_sparsity:.0%} → grokked={gm['grokked']} "
+        f"grok_step={gm['grokking_step']} val={gm['final_val_acc']:.3f}"
+    )
+    return summary_to_aggregate_row(load_summary(grok_dir))
 
-    print(f"  λ={weight_decay:.0e}  sp={target_sparsity:.0%}  → "
-          f"grokked={result['grokked']}  S_G={result['grokking_step']:,}  "
-          f"val={result['final_val_acc']:.3f}")
-
-    if _WANDB_AVAILABLE and wandb_cfg.get("enabled", False):
-        _wandb.summary.update({k: result[k] for k in ["grokked","grokking_step","final_val_acc"]})
-        _wandb.finish()
-
-    return result
-
-
-# ===========================================================================
-# Plots
-# ===========================================================================
-
-def plot_heatmap(
-    grid:        np.ndarray,
-    wd_values:   list[float],
-    sp_values:   list[float],
-    title:       str,
-    output_path: str,
-    cmap:        str = "RdYlGn_r",
-    fmt:         str = ".0f",
-) -> None:
-    fig, ax = plt.subplots(figsize=(8, 5))
-    ax.set_title(title, fontsize=12, fontweight="bold")
-    im = ax.imshow(grid, cmap=cmap, aspect="auto")
-    plt.colorbar(im, ax=ax, shrink=0.8)
-    ax.set_xticks(range(len(wd_values)))
-    ax.set_xticklabels([f"λ={wd:.0e}" for wd in wd_values], fontsize=9)
-    ax.set_yticks(range(len(sp_values)))
-    ax.set_yticklabels([f"{s:.0%}" for s in sp_values], fontsize=9)
-    ax.set_xlabel("Weight Decay (λ)", fontsize=10)
-    ax.set_ylabel("Sparsity", fontsize=10)
-    for i in range(len(sp_values)):
-        for j in range(len(wd_values)):
-            v = grid[i, j]
-            if not np.isnan(v):
-                ax.text(j, i, format(v, fmt) if v >= 0 else "DNF",
-                        ha="center", va="center", fontsize=9,
-                        color="white" if abs(v) > np.nanmax(grid) * 0.6 else "black")
-    plt.tight_layout()
-    plt.savefig(output_path, dpi=150, bbox_inches="tight")
-    plt.close()
-    print(f"  Saved: {output_path}")
-
-
-def plot_wd_sparsity_lines(
-    results:     list[dict],
-    wd_values:   list[float],
-    sp_values:   list[float],
-    n_steps:     int,
-    output_path: str,
-) -> None:
-    fig, axes = plt.subplots(1, 2, figsize=(13, 5))
-    fig.suptitle("Weight Decay × Sparsity Interaction\n"
-                 "Are they substitutes or complements for grokking?",
-                 fontsize=12, fontweight="bold")
-    colors = ["#E53935","#FB8C00","#43A047","#1E88E5"]
-
-    for ax, (mk, ml, log_y) in zip(axes, [
-        ("grokking_step", "Steps to Grok (S_G)", True),
-        ("final_val_acc", "Final Validation Accuracy", False),
-    ]):
-        for i, wd in enumerate(wd_values):
-            vals = []
-            for sp in sp_values:
-                matches = [r for r in results
-                           if abs(r["weight_decay"] - wd) < 1e-9
-                           and abs(r["target_sparsity"] - sp) < 0.01]
-                if matches:
-                    r = matches[0]
-                    v = r[mk] if (mk != "grokking_step" or r["grokked"]) \
-                        else n_steps * 1.05
-                else:
-                    v = float("nan")
-                vals.append(v)
-
-            ax.plot([s * 100 for s in sp_values], vals, marker="o",
-                    color=colors[i % len(colors)], label=f"λ={wd:.0e}",
-                    linewidth=2, markersize=8)
-
-        ax.set_xlabel("Sparsity (%)", fontsize=11)
-        ax.set_ylabel(ml, fontsize=11)
-        if log_y:
-            ax.set_yscale("log")
-        ax.legend(fontsize=9)
-        ax.grid(True, alpha=0.3)
-
-    plt.tight_layout()
-    plt.savefig(output_path, dpi=150, bbox_inches="tight")
-    plt.close()
-    print(f"  Saved: {output_path}")
-
-
-# ===========================================================================
-# Hydra main
-# ===========================================================================
 
 @hydra.main(config_path="../configs", config_name="config", version_base=None)
 def main(cfg: DictConfig) -> None:
-    if cfg.device == "auto":
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    else:
-        device = torch.device(cfg.device)
-
-    seed = int(os.environ.get("GROK_SEED", cfg.seed))
-
-    exp_cfg = cfg.experiment
-    wd_values = list(exp_cfg.wd_values)
-    sp_values = list(exp_cfg.sparsity_values)
-    total     = len(wd_values) * len(sp_values)
+    enable_utf8_stdout()
+    device = resolve_device(cfg)
+    seeds = resolve_seeds(cfg)
+    wd_values = list(cfg.experiment.wd_values)
+    sp_values = list(cfg.experiment.sparsity_values)
+    exp_dir = Path(cfg.results_dir) / cfg.experiment.name
 
     print(f"\n{'#'*65}")
-    print(f"  Exp C — WD × Sparsity  |  {len(wd_values)}×{len(sp_values)}={total} conditions")
-    print(f"  device={device}  seed={seed}")
-    print(f"{'#'*65}\n")
+    print(f"  Exp C — WD × Sparsity (one-shot magnitude pruning)")
+    print(f"  {len(wd_values)}×{len(sp_values)} cells | seeds={seeds} | device={device}")
+    print(f"{'#'*65}")
 
-    base_dir = Path(cfg.results_dir) / "exp_c" / f"seed_{seed}"
-    all_results: list[dict] = []
-    seed_offset = 0
+    rows: list[dict] = []
+    for seed in seeds:
+        for sp, wd in product(sp_values, wd_values):
+            rows.append(run_condition(cfg, wd, sp, seed, device, exp_dir))
 
-    for sp, wd in product(sp_values, wd_values):
-        run_dir = base_dir / f"wd{wd:.0e}_sp{sp:.2f}"
-        result  = run_condition(cfg, wd, sp, device, seed + seed_offset, run_dir)
-        all_results.append(result)
-        seed_offset += 1
-
-    # ── Heatmaps ──────────────────────────────────────────────────────────
-    sg_grid  = np.full((len(sp_values), len(wd_values)), np.nan)
-    acc_grid = np.full((len(sp_values), len(wd_values)), np.nan)
-
-    for r in all_results:
-        try:
-            i = sp_values.index(r["target_sparsity"])
-            j = wd_values.index(r["weight_decay"])
-        except ValueError:
-            continue
-        sg_grid[i, j]  = r["grokking_step"] if r["grokked"] else -1
-        acc_grid[i, j] = r["final_val_acc"]
-
-    results_path = Path(cfg.results_dir) / "exp_c_results.json"
-    with open(results_path, "w") as f:
-        json.dump(all_results, f, indent=2)
-    print(f"\n  Results saved: {results_path}")
-
-    fig_dir = Path(cfg.results_dir) / "figures"
-    fig_dir.mkdir(parents=True, exist_ok=True)
-
-    plot_heatmap(sg_grid, wd_values, sp_values,
-                 "Steps to Grok (S_G)\n(darker = faster grokking)",
-                 str(fig_dir / "exp_c_heatmap_sg.png"), cmap="RdYlGn_r")
-    plot_heatmap(acc_grid, wd_values, sp_values,
-                 "Final Validation Accuracy",
-                 str(fig_dir / "exp_c_heatmap_val_acc.png"),
-                 cmap="RdYlGn", fmt=".2f")
-    plot_wd_sparsity_lines(all_results, wd_values, sp_values,
-                           cfg.training.n_grok_steps,
-                           str(fig_dir / "exp_c_wd_sparsity_lines.png"))
-
-    print(f"\n  Experiment C complete.")
+    agg = write_aggregate_csv(exp_dir / "aggregate.csv", rows)
+    print(f"\n  Aggregate → {agg}")
+    print(f"  Plot offline with analysis/plot_exp_c_heatmap.py")
 
 
 if __name__ == "__main__":

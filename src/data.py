@@ -48,6 +48,9 @@ class ModularArithmeticDataset(Dataset):
     seed       : Random seed for reproducible shuffling.
     """
 
+    # Task-registration seam: add a new modular operation here (and a matching
+    # configs/dataset/<name>.yaml) to extend the task family. The rest of the
+    # pipeline is operation-agnostic.
     OPERATIONS: dict[str, callable] = {
         "add": lambda a, b, p: (a + b) % p,
         "sub": lambda a, b, p: (a - b) % p,
@@ -119,11 +122,19 @@ def get_dataloaders(
     train_frac: float = 0.5,
     batch_size: int = 512,
     seed: int = 42,
+    full_batch: bool = True,
     num_workers: int = 0,
     pin_memory: bool = True,
 ) -> tuple[DataLoader, DataLoader]:
     """
     Build train and validation DataLoaders.
+
+    Parameters
+    ----------
+    full_batch : When True (canonical grokking setup), the train loader yields
+                 the ENTIRE training set as a single batch each step — i.e.
+                 full-batch gradient descent. ``batch_size`` is then ignored for
+                 the train loader. The val loader always evaluates in one batch.
 
     Returns
     -------
@@ -140,13 +151,15 @@ def get_dataloaders(
         train_frac=train_frac, seed=seed,
     )
 
+    train_bs = len(train_ds) if full_batch else batch_size
+
     train_loader = DataLoader(
-        train_ds, batch_size=batch_size, shuffle=True,
+        train_ds, batch_size=train_bs, shuffle=not full_batch,
         num_workers=num_workers, pin_memory=(pin_memory and cuda),
         drop_last=False,
     )
     val_loader = DataLoader(
-        val_ds, batch_size=batch_size, shuffle=False,
+        val_ds, batch_size=len(val_ds), shuffle=False,
         num_workers=num_workers, pin_memory=(pin_memory and cuda),
         drop_last=False,
     )

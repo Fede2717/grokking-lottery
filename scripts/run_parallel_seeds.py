@@ -5,12 +5,16 @@ scripts/run_parallel_seeds.py
 Parallel Seed Launcher for 2× NVIDIA T4 (Kaggle environment)
 =============================================================
 
-Distributes N experiment seeds across 2 GPUs concurrently using
-Python subprocess — NO DDP overhead, NO NCCL, NO torch.distributed.
+Distributes N experiment seeds across GPUs concurrently using Python subprocess
+— NO DDP overhead, NO NCCL, NO torch.distributed.
+
+Runs with NO external accounts or keys: logging defaults to TensorBoard/CSV and
+the launcher never injects WANDB_API_KEY or assumes a wandb login. (Opt into
+wandb only via logging.backend=wandb wandb.enabled=true, after `wandb login`.)
 
 Each seed runs as a completely independent process with its own:
-    • CUDA_VISIBLE_DEVICES  (limits which physical GPU it uses)
-    • GROK_SEED             (overrides cfg.seed in the experiment)
+    • CUDA_VISIBLE_DEVICES  (limits which physical GPU it uses; harmless on CPU)
+    • GROK_SEED             (pins the seed for that process; read by src.runner)
     • Hydra output_dir      (separate result directory per seed)
 
 GPU assignment
@@ -161,11 +165,12 @@ def build_command(
 
     if debug:
         cmd += [
-            "training.n_grok_steps=5000",
-            "pruning.imp_steps_per_round=500",
-            "training.log_every=50",
+            "training.n_grok_steps=2000",
+            "pruning.imp_steps_per_round=100",
+            "training.metrics_every=200",
             "pruning.target_sparsities=[0.0,0.5,0.9]",
             "num_seeds=1",
+            "logging.backend=none",
         ]
 
     cmd.extend(extra_args)
@@ -244,6 +249,13 @@ def run_parallel(
 # ===========================================================================
 
 def main() -> None:
+    # Keep prints safe on a Windows cp1252 console; no-op elsewhere.
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(encoding="utf-8")
+        except Exception:
+            pass
+
     parser = argparse.ArgumentParser(
         description="Parallel seed launcher for Grokking × LTH experiments",
         formatter_class=argparse.RawDescriptionHelpFormatter,

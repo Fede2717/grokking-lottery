@@ -1,46 +1,53 @@
 # configs/config.yaml
 # ====================
-# Root Hydra configuration for the Grokking × LTH project.
-# All sub-configs are composed via the defaults list.
+# Root Hydra configuration. Sub-configs are composed via the defaults list.
+# The DEFAULT composition is the CANONICAL grokking setup: a 1-layer no-LayerNorm
+# transformer trained full-batch with AdamW (weight_decay=1.0).
 #
 # Usage:
-#   python -m experiments.exp_b_lth_then_grok              # defaults
+#   python -m experiments.exp_b_lth_then_grok                       # canonical defaults
 #   python -m experiments.exp_b_lth_then_grok training.weight_decay=1e-2
-#   python -m experiments.exp_b_lth_then_grok --multirun pruning.target_sparsities="[0.5,0.9]"
+#   python -m experiments.exp_b_lth_then_grok model=transformer_2l_preln   # variant
+#   python -m experiments.exp_b_lth_then_grok dataset=modular_mul          # variant
+#   python -m experiments.exp_b_lth_then_grok logging.backend=none
 
 defaults:
   - dataset:    modular_add
-  - model:      small_transformer
-  - training:   default
+  - model:      transformer_1l      # CANONICAL default (1L, no LayerNorm)
+  - training:   default             # CANONICAL default (full-batch AdamW, wd=1.0)
   - pruning:    imp
   - experiment: exp_b
-  - _self_           # allows root-level overrides
+  - _self_                          # allows root-level overrides
 
 # ── Top-level execution control ───────────────────────────────────────────────
 seed:        42
-num_seeds:   5          # number of independent seeds for CI plots
+num_seeds:   5          # number of independent seeds (CI plots / aggregate rows)
 results_dir: "results"
-use_amp:     true       # automatic mixed precision (T4 supports fp16)
+use_amp:     false      # canonical full-batch GD runs fp32; AMP only helps mini-batch GPU
 device:      "auto"     # "auto" | "cuda" | "cpu"
 
-# ── Weights & Biases ──────────────────────────────────────────────────────────
-wandb:
-  enabled:   true
-  project:   "grokking-lottery"
-  entity:    null        # set to your W&B username / team
-  group:     null        # auto-set per experiment if null
-  tags:      []
-  log_every: 100         # log to W&B every N steps (should match training.log_every)
-  # Advanced metric logging intervals (expensive — run less frequently)
-  hessian_every:  5000   # steps between Hessian eigenvalue estimates
-  fourier_every:  1000   # steps between full Fourier spectrum logs
+# Expensive/fragile sharpness metric (Phase 7). Exact Hessian via HVP, OFF by default.
+compute_hessian: false
 
-# ── Reproducibility ───────────────────────────────────────────────────────────
-# CRITICAL: initial model weights are saved to disk at step 0.
-# IMP rewinding loads from this file — never from an in-memory dict.
+# ── Logging ─────────────────────────────────────────────────────────────────────
+# CSV is ALWAYS written (results/<exp>/<run>/metrics.csv, long format) plus a per-run
+# summary.json and a per-experiment aggregate.csv — so offline plots are reproducible
+# WITHOUT any external account. `backend` only selects the live VIEWER.
+logging:
+  backend: "tensorboard"   # tensorboard (default) | csv | none | wandb
+
+# ── Weights & Biases (OPTIONAL, OFF by default) ───────────────────────────────────
+# Enable only by setting logging.backend=wandb AND wandb.enabled=true. The code never
+# logs in or reads WANDB_API_KEY for you — `wandb login` is the user's responsibility.
+wandb:
+  enabled:   false
+  project:   "grokking-lottery"
+  entity:    null
+  tags:      []
+
+# ── Reproducibility ───────────────────────────────────────────────────────────────
+# Initial model weights are saved to disk at step 0; LTH rewinding loads from that
+# file (never an in-memory dict).
 checkpoint:
-  save_init:       true
-  init_filename:   "init_weights.pt"    # relative to run output dir
-  save_on_grok:    true
-  save_on_mem:     true
-  save_final:      true
+  save_init:     true
+  init_filename: "init_weights.pt"

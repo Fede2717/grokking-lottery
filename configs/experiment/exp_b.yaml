@@ -1,10 +1,9 @@
-name:        "exp_b_lth_then_grok"
-description: "IMP lottery ticket discovery followed by full grokking phase"
+# configs/experiment/exp_b.yaml
+# ==============================
+# Experiment B — EXTENSION: find a sparse ticket (IMP) BEFORE grokking, then
+# train it. Tests whether a sparse subnetwork ELIMINATES the
+# memorization→generalization delay (gap → 0), per Minegishi et al. (TMLR 2025).
+name:        "exp_b"
+description: "IMP ticket discovery before grokking, then full grokking phase"
 
-run_one_shot_ablation: true
-
-plots:
-  grokking_curves:      true
-  efficiency_frontier:  true
-  weight_norm_collapse: true
-  fourier_checkpoints:  true
+run_one_shot_ablation: true   # also run one-shot magnitude pruning as an ablation

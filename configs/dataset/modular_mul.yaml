@@ -1,0 +1,8 @@
+# configs/dataset/modular_mul.yaml
+# =================================
+# Modular multiplication: (a * b) mod p.  Extensibility seam (same machinery as
+# modular_add, different operation). Select with: dataset=modular_mul
+name:       "modular_mul"
+p:          97
+operation:  "mul"
+train_frac: 0.5   # Nanda's mainline uses 0.3; 0.5 is acceptable and used by Power.

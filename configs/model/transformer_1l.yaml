@@ -1,0 +1,14 @@
+# configs/model/transformer_1l.yaml
+# ==================================
+# CANONICAL grokking transformer (DEFAULT).
+# 1-layer decoder-only transformer, NO LayerNorm, learned positional
+# embeddings, untied embed/unembed, logits read from the last ("=") token.
+# Setup follows Nanda (2023) / Power (2022) / Varma (2023).
+name:      "transformer_1l"
+n_layers:  1
+d_model:   128
+n_heads:   4        # d_head = d_model / n_heads = 32
+d_ff:      512
+dropout:   0.0
+layernorm: "none"   # {none, pre, post}; canonical = none
+seq_len:   4        # [a, op, b, =]

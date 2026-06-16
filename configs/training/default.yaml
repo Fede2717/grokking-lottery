@@ -1,23 +1,45 @@
 # configs/training/default.yaml
 # ==============================
-# Optimiser and training loop configuration.
-# Weight decay is the PRIMARY causal lever for grokking speed (Liu et al. 2023).
-# Use Hydra sweeps to vary weight_decay for Experiment C.
+# CANONICAL training regime (DEFAULT): full-batch AdamW.
+# Optimiser hyperparameters follow the canonical grokking setup
+# (Nanda 2023 / Power 2022): lr=1e-3, weight_decay=1.0, betas=(0.9,0.98),
+# eps=1e-8. Weight decay is the primary lever for the grokking transition.
 
-# AdamW hyperparameters (Power et al. 2022)
+# ── Optimizer ──────────────────────────────────────────────────────────────
+optimizer:    "adamw"   # config-driven factory; seams for sgd/adam/muon exist
 lr:           1.0e-3
-weight_decay: 1.0e-3     # λ — key experimental variable
+weight_decay: 1.0        # canonical literature default (verify per study)
 beta1:        0.9
 beta2:        0.98
+eps:          1.0e-8
 
-# Training duration
-n_grok_steps: 50000      # main grokking phase steps; 50k is reliable for p=97 add
-log_every:    100        # eval + metric logging frequency (steps)
+# Canonical setups do NOT clip gradients. Kept off; set to a float to enable.
+max_grad_norm: null
 
-# Grokking detection thresholds
-grok_threshold:  0.95    # val_acc required to register grokking event
-mem_threshold:   0.99    # train_acc required to register memorisation event
-grok_window:     3       # consecutive evals above threshold before event fires
+# ── Batching ─────────────────────────────────────────────────────────────────
+full_batch:  true        # full-batch GD: one step == one pass over the train set
+batch_size:  512         # used ONLY when full_batch=false (see training/minibatch)
 
-# Gradient clipping
-max_grad_norm: 1.0
+# ── Duration ──────────────────────────────────────────────────────────────────
+n_grok_steps: 40000      # main grokking phase steps (reliable for p=97 add)
+
+# ── Two-schedule measurement (Phase 1) ─────────────────────────────────────────
+# Cheap eval (train/val acc + loss): fine early, coarse later. Decouples the
+# reported grokking step from the log period (the old floor was log*window=300).
+eval_every:
+  fine_until:      1000  # eval every fine_interval steps below this step
+  fine_interval:   5
+  coarse_interval: 25    # eval every this many steps thereafter
+metrics_every:     1000  # expensive metrics (Fourier/Hessian/weight norms)
+
+# ── Grokking detection (computed POST-HOC from the logged curves) ───────────────
+grok_threshold: 0.95     # val_acc threshold (Minegishi P=95)
+mem_threshold:  0.95     # train_acc threshold (Minegishi P=95)
+grok_window:    2        # consecutive passing evals required for a genuine crossing
+
+# ── Early stop (Phase 9) ────────────────────────────────────────────────────────
+# Applies ONLY to sparse / non-baseline conditions; the dense baseline always
+# runs the full n_grok_steps. The grokked checkpoint + mask are saved before stop.
+early_stop:
+  enabled:  false
+  patience: 500          # logged-eval steps of margin to continue past grokking

@@ -1,7 +1,10 @@
-name:        "exp_a_grok_then_prune"
-description: "Train dense model to grokking, then probe circuit survival under pruning"
+# configs/experiment/exp_a.yaml
+# ==============================
+# Experiment A — CONTROL: grok first, then prune + rewind (the faithful
+# "grokked ticket" path). Maps to Minegishi et al. (TMLR 2025): a subnetwork
+# extracted AFTER full generalization, rewound and retrained.
+name:        "exp_a"
+description: "Grok dense, extract grokked ticket, rewind (W_0 vs W_mem) and retrain"
 
-plots:
-  rewind_comparison:       true   # ← MUST be indented 2 spaces
-  post_grok_accuracy:      true
-  grokking_curves_rewound: true
+# Rewind sources to compare when retraining the pruned subnetwork.
+rewind_labels: ["W_init", "W_mem"]

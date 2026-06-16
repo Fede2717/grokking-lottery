@@ -1,0 +1,34 @@
+# configs/training/minibatch.yaml
+# ================================
+# NON-CANONICAL VARIANT: mini-batch training (the project's original regime).
+# The canonical grokking setup uses FULL-BATCH gradient descent; this variant is
+# kept only for comparison. Select with: training=minibatch
+# Weight decay is left configurable (override training.weight_decay as needed).
+
+optimizer:    "adamw"
+lr:           1.0e-3
+weight_decay: 1.0e-3     # configurable; original regime used a smaller value
+beta1:        0.9
+beta2:        0.98
+eps:          1.0e-8
+
+max_grad_norm: null
+
+full_batch:  false       # mini-batch SGD-style stepping
+batch_size:  512
+
+n_grok_steps: 40000
+
+eval_every:
+  fine_until:      1000
+  fine_interval:   5
+  coarse_interval: 25
+metrics_every:     1000
+
+grok_threshold: 0.95
+mem_threshold:  0.95
+grok_window:    2
+
+early_stop:
+  enabled:  false
+  patience: 500

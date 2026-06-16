@@ -299,89 +299,101 @@ def compute_hessian_top_eigenvalue(
     criterion: nn.Module,
     loader: DataLoader,
     device: torch.device,
+    masks: dict[str, torch.Tensor] | None = None,
     n_steps: int = 20,
     n_batches: int = 4,
 ) -> float:
     """
-    Estimate the top Hessian eigenvalue via power iteration.
+    Exact top Hessian eigenvalue via Hessian-vector products (HVP).
 
-    Measures loss-landscape *sharpness*.  Sharp minima (high λ_max)
-    correlate with poor generalisation (Keskar et al., 2017).
-    Grokking is associated with a transition to flatter regions.
+    Measures loss-landscape *sharpness* (high λ_max ↔ sharp minima ↔ typically
+    worse generalisation; grokking is associated with flattening).
 
-    This is a Hessian-vector product approach:
-        Hv ≈ (g(w + εv) - g(w - εv)) / (2ε)
-    using finite differences on gradients (no second-order autograd).
+    Method
+    ------
+    Uses a true HVP through **double backward** — no finite differences::
+
+        g  = ∇_θ L                       (create_graph=True)
+        Hv = ∇_θ (gᵀ v)                   (torch.autograd.grad of the inner product)
+
+    then power-iterates ``v ← Hv / ‖Hv‖`` and reports the Rayleigh quotient
+    ``vᵀ H v``.
+
+    Sparse-net correctness
+    ----------------------
+    The old finite-difference version perturbed ALL parameters, including
+    mask-zeroed weights, which corrupts the estimate for pruned networks. Here
+    the probe vector ``v`` is restricted to the ACTIVE (unmasked) subspace by
+    zeroing it on masked dimensions (``masks`` optional); ``Hv`` is re-zeroed the
+    same way, so the iteration stays in the active subspace.
+
+    EXPENSIVE / FRAGILE metric — kept OFF by default (config ``compute_hessian``).
 
     Parameters
     ----------
-    n_steps   : Power iteration steps (20 sufficient for top eigenvalue).
-    n_batches : Batches averaged per gradient evaluation.
+    masks     : Optional {param_name → 0/1 tensor}; ``v`` is confined to mask==1.
+    n_steps   : Power-iteration steps.
+    n_batches : Batches summed into the loss whose Hessian is probed.
 
     Returns
     -------
     Estimated top Hessian eigenvalue (float).
     """
+    was_training = model.training
     model.eval()
-    params = [p for p in model.parameters() if p.requires_grad]
 
-    def get_gradient(perturbed_params=None) -> list[torch.Tensor]:
-        """Compute ∇L over n_batches, optionally with perturbed params."""
-        model.zero_grad()
-        loader_iter = iter(loader)
-        total_loss  = torch.tensor(0.0, device=device)
-        count = 0
-        for _ in range(n_batches):
-            try:
-                x, y = next(loader_iter)
-            except StopIteration:
-                break
-            x, y = x.to(device), y.to(device)
-            total_loss = total_loss + criterion(model(x), y)
-            count += 1
-        if count > 0:
-            (total_loss / count).backward()
-        return [p.grad.detach().clone() if p.grad is not None
-                else torch.zeros_like(p)
-                for p in params]
+    named = [(n, p) for n, p in model.named_parameters() if p.requires_grad]
+    params = [p for _, p in named]
 
-    # Initialise random unit vector v
-    v   = [torch.randn_like(p) for p in params]
-    v_n = sum(t.pow(2).sum() for t in v).sqrt()
-    v   = [t / v_n for t in v]
+    def active_mask(name: str, ref: torch.Tensor) -> torch.Tensor:
+        if masks is not None and name in masks:
+            return masks[name].to(device=ref.device, dtype=ref.dtype)
+        return torch.ones_like(ref)
+
+    pmasks = [active_mask(n, p) for n, p in named]
+
+    # Build a single differentiable loss over n_batches, then its gradient graph.
+    loader_iter = iter(loader)
+    total_loss = None
+    count = 0
+    for _ in range(n_batches):
+        try:
+            x, y = next(loader_iter)
+        except StopIteration:
+            break
+        x, y = x.to(device), y.to(device)
+        batch_loss = criterion(model(x), y)
+        total_loss = batch_loss if total_loss is None else total_loss + batch_loss
+        count += 1
+    if count == 0:
+        if was_training:
+            model.train()
+        return 0.0
+    loss = total_loss / count
+    grads = torch.autograd.grad(loss, params, create_graph=True)
+
+    def _restrict(vs):
+        return [v * m for v, m in zip(vs, pmasks)]
+
+    def _norm(vs):
+        return float(sum(v.pow(2).sum() for v in vs)) ** 0.5
+
+    # Random unit probe vector confined to the active subspace.
+    v = _restrict([torch.randn_like(p) for p in params])
+    nrm = _norm(v) + 1e-12
+    v = [vi / nrm for vi in v]
 
     eigenvalue = 0.0
-    eps        = 1e-3
-
     for _ in range(n_steps):
-        # Perturb +εv
-        with torch.no_grad():
-            for p, vi in zip(params, v):
-                p.data.add_(vi, alpha=eps)
-        g_plus = get_gradient()
+        gv = sum((g * vi).sum() for g, vi in zip(grads, v))
+        Hv = torch.autograd.grad(gv, params, retain_graph=True)
+        Hv = _restrict([hv.detach() for hv in Hv])
+        eigenvalue = float(sum((vi * hv).sum() for vi, hv in zip(v, Hv)))  # Rayleigh (v unit)
+        nrm = _norm(Hv) + 1e-12
+        v = [hv / nrm for hv in Hv]
 
-        # Perturb -2εv  (undo +εv and apply -εv)
-        with torch.no_grad():
-            for p, vi in zip(params, v):
-                p.data.sub_(vi, alpha=2 * eps)
-        g_minus = get_gradient()
-
-        # Restore
-        with torch.no_grad():
-            for p, vi in zip(params, v):
-                p.data.add_(vi, alpha=eps)
-
-        # Hv ≈ (g+ - g-) / (2ε)
-        Hv = [(gp - gm) / (2 * eps) for gp, gm in zip(g_plus, g_minus)]
-
-        # Rayleigh quotient: λ = v^T H v / v^T v = v^T Hv  (v is unit)
-        eigenvalue = float(sum((vi * Hvi).sum() for vi, Hvi in zip(v, Hv)))
-
-        # Normalise Hv to get next v
-        Hv_n = sum(t.pow(2).sum() for t in Hv).sqrt() + 1e-12
-        v    = [t / Hv_n for t in Hv]
-
-    model.train()
+    if was_training:
+        model.train()
     return abs(eigenvalue)
 
 
@@ -415,20 +427,22 @@ def compute_grokking_metrics(history_dict: dict) -> dict:
     val_acc = history_dict["val_acc"]
     tr_acc  = history_dict["train_acc"]
     l2      = history_dict["weight_l2"]
+    # Weight norms live on their own (sparser) step axis; fall back to `steps`
+    # for older histories that did not record metric_steps.
+    l2_steps = history_dict.get("metric_steps") or steps
 
     S_mem   = history_dict["memorization_step"]
     S_G     = history_dict["grokking_step"]
 
-    def _val_at_step(s: int, field: list) -> float:
-        if s < 0 or len(steps) == 0:
+    def _val_at_step(s: int, field: list, axis: list) -> float:
+        if s < 0 or len(field) == 0 or len(axis) == 0:
             return float("nan")
-        # Find nearest logged step
-        diffs  = [abs(st - s) for st in steps]
-        idx    = int(np.argmin(diffs))
+        # Find nearest logged step on the relevant axis.
+        idx = int(np.argmin([abs(st - s) for st in axis[: len(field)]]))
         return float(field[idx])
 
-    l2_at_grok = _val_at_step(S_G,   l2)
-    l2_at_mem  = _val_at_step(S_mem, l2)
+    l2_at_grok = _val_at_step(S_G,   l2, l2_steps)
+    l2_at_mem  = _val_at_step(S_mem, l2, l2_steps)
     l2_ratio   = (l2_at_grok / l2_at_mem) if (l2_at_mem > 0) else float("nan")
 
     gen_gap = [ta - va for ta, va in zip(tr_acc, val_acc)]

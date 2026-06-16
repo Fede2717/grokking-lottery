@@ -1,13 +1,11 @@
 # configs/pruning/imp.yaml
 # =========================
-# Iterative Magnitude Pruning (IMP) configuration.
-# One-shot pruning uses the same target_sparsities list as an ablation.
+# Magnitude pruning configuration (IMP for Exp B; one-shot magnitude pruning for
+# Exp C). One-shot uses the same target_sparsities list.
 
-method: "imp"            # "imp" (primary) | "one_shot" (ablation)
+method: "imp"            # "imp" (Exp B primary) | "one_shot" (Exp C / ablation)
 
-# Sparsity levels evaluated in Experiment B.
-# Each level = one full IMP + grokking run.
-# Sweep example: python ... pruning.target_sparsities="[0.5,0.9,0.95]"
+# Sparsity levels. Each level = one full pruning + grokking run.
 target_sparsities:
   - 0.0     # dense baseline
   - 0.2
@@ -19,13 +17,15 @@ target_sparsities:
 
 # IMP schedule
 prune_rate_per_round: 0.20   # fraction of ACTIVE weights pruned per round
-                              # 20% per round → 6 rounds to reach 73.8% sparsity
-imp_steps_per_round:  2000   # gradient steps for short training between rounds
+# imp_steps_per_round: gradient steps of SHORT training between IMP rounds.
+# NOTE: with full-batch GD, one step == one epoch, so this counts epochs. Keep it
+# small so each IMP round does SHORT training (find the ticket), NOT full grokking
+# — unless you deliberately want to extract a post-generalization "grokked ticket".
+imp_steps_per_round:  400
 
 # Rewinding strategy (canonical LTH)
-rewind_to_init: true         # True = rewind to W_0 (step 0 weights on disk)
-                             # False = rewind to W_warm (early checkpoint)
+rewind_to_init: true         # True = rewind to W_0 (step-0 weights on disk)
 
-# Fourier analysis at checkpoints (light version — key events only)
+# Fourier analysis at key checkpoints (light)
 compute_fourier: true
-fourier_top_k:  5            # dominant frequencies to report
+fourier_top_k:  5

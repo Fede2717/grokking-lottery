@@ -1,5 +1,12 @@
-name:        "exp_c_wd_ablation"
-description: "2D grid: weight_decay x sparsity — substitutes or complements?"
+# configs/experiment/exp_c.yaml
+# ==============================
+# Experiment C — ABLATION: weight-decay x sparsity grid, using ONE-SHOT MAGNITUDE
+# PRUNING (NOT IMP). Tests whether weight decay and sparsity are substitutes or
+# complements for closing the grokking gap. The short pretraining before pruning
+# uses weight_decay=0 for ALL cells to remove the weight-decay confound; the grid
+# value is applied only in the grokking phase.
+name:        "exp_c"
+description: "2D grid: weight_decay x sparsity (one-shot magnitude pruning)"
 
 wd_values:
   - 1.0e-4
@@ -12,8 +19,3 @@ sparsity_values:
   - 0.5
   - 0.8
   - 0.9
-
-plots:
-  heatmap_sg:        true
-  heatmap_val_acc:   true
-  wd_sparsity_lines: true

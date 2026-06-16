@@ -1,4 +1,7 @@
+# configs/dataset/modular_add.yaml
+# =================================
+# Modular addition: (a + b) mod p.  Canonical grokking task.
+name:       "modular_add"
 p:          97
 operation:  "add"
-train_frac: 0.5
-batch_size: 512
+train_frac: 0.5   # Nanda's mainline uses 0.3; 0.5 is acceptable and used by Power.
