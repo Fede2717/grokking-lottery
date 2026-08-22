@@ -1,0 +1,146 @@
+{
+  "schema_version": 1,
+  "experiment": "exp_b",
+  "provenance_classification": "HIGH-CONFIDENCE INFERRED",
+  "inferred_source_commit": "417a7e09340fe0c2dd5b1fd9eb77eb299a1176a7",
+  "source_repository": "https://github.com/Fede2717/grokking-lottery.git",
+  "why_not_exact": "The Kaggle notebooks used a plain git clone and did not record git rev-parse HEAD. No source hash or resolved Hydra config is present in the result bundles.",
+  "git_evidence": {
+    "inferred_commit_subject": "Refactor: canonical setup, measurement-floor fix, TensorBoard+CSV logging, tests, docs",
+    "inferred_commit_author_time": "2026-06-16T23:20:38+02:00",
+    "inferred_commit_commit_time": "2026-06-16T23:22:13+02:00",
+    "current_branch": "main",
+    "current_origin_main": "417a7e09340fe0c2dd5b1fd9eb77eb299a1176a7",
+    "reasoning": "The inferred commit was the repository tip before the earliest archive entry timestamp, current main and origin/main still point to it, and the archived summary schema and evaluation schedule match that implementation. Historical remote HEAD at clone time was not independently captured."
+  },
+  "archive_hash_method": {
+    "container_hash": "SHA-256 of the ZIP file bytes",
+    "content_manifest_hash": "SHA-256 of sorted UTF-8 lines: entry_name, tab, uncompressed_length, tab, SHA-256(entry_bytes), joined by newline"
+  },
+  "canonical_archives": [
+    {
+      "path": "res/raw/exp_b_sp_00_20_50.zip",
+      "original_name": "results_exp_b_part1 (1).zip",
+      "coverage": {
+        "target_sparsities": [0.0, 0.2, 0.5],
+        "methods": ["imp", "one_shot"],
+        "seeds": [0, 1, 2, 3, 4]
+      },
+      "size_bytes": 5569637,
+      "zip_sha256": "88dea4775a09f63ac460deb6cde2cdd1b820e212623c726db2d4354099f537ac",
+      "content_manifest_sha256": "3bdd46611fa0e937b45193b206ca4f4da6c99d06c97f6eaa4b49b0a1c0db6094",
+      "file_entry_count": 181,
+      "entry_timestamp_utc_min": "2026-06-17T13:38:32Z",
+      "entry_timestamp_utc_max": "2026-06-17T21:50:48Z"
+    },
+    {
+      "path": "res/raw/exp_b_sp_70_80.zip",
+      "original_name": "results_exp_b_part1.zip",
+      "coverage": {
+        "target_sparsities": [0.7, 0.8],
+        "methods": ["imp", "one_shot"],
+        "seeds": [0, 1, 2, 3, 4]
+      },
+      "size_bytes": 3668899,
+      "zip_sha256": "83b58a363618aeb6dec5a26fed3ea0f300095a8d9c581ea04f7150a41d8f8c34",
+      "content_manifest_sha256": "4e4b21d672255899786ac42497334887c31aa850ee8ba833f1bafb221472358f",
+      "file_entry_count": 141,
+      "entry_timestamp_utc_min": "2026-06-18T10:44:48Z",
+      "entry_timestamp_utc_max": "2026-06-18T15:59:08Z"
+    },
+    {
+      "path": "res/raw/exp_b_sp_90_95.zip",
+      "original_name": "results_exp_b_part3.zip",
+      "coverage": {
+        "target_sparsities": [0.9, 0.95],
+        "methods": ["imp", "one_shot"],
+        "seeds": [0, 1, 2, 3, 4]
+      },
+      "size_bytes": 4661170,
+      "zip_sha256": "908c3f92cfd815c350604d3a80d8fa8b880fad8bdd743e99cfee644e91f29833",
+      "content_manifest_sha256": "b2024a7560355e9abe8fbcd81394854703c6716da4863c27da5ed70d4cb5d949",
+      "file_entry_count": 141,
+      "entry_timestamp_utc_min": "2026-06-18T23:08:04Z",
+      "entry_timestamp_utc_max": "2026-06-19T08:02:28Z"
+    }
+  ],
+  "redundant_archive_not_retained": {
+    "original_name": "results_exp_b_part2.zip",
+    "size_bytes": 3668899,
+    "zip_sha256": "7a620aca63ea740d4a1018cc34ec425fda6ffde3f7dadedc2c622227b36c5033",
+    "content_manifest_sha256": "4e4b21d672255899786ac42497334887c31aa850ee8ba833f1bafb221472358f",
+    "identity_check": "141 matching entry names, lengths, and entry SHA-256 hashes; zero differing entries versus retained results_exp_b_part1.zip"
+  },
+  "artifact_inventory": {
+    "final_grok_phase_cells": 70,
+    "one_shot_warmup_cells": 30,
+    "imp_last_preserved_phase_cells": 30,
+    "methods": ["imp", "one_shot"],
+    "target_sparsities": [0.0, 0.2, 0.5, 0.7, 0.8, 0.9, 0.95],
+    "seeds": [0, 1, 2, 3, 4],
+    "per_phase_files": ["history.json", "metrics.csv", "summary.json"],
+    "tensorboard_events_present": true,
+    "checkpoints_or_masks_present": false,
+    "captured_stdout_logs_present": false,
+    "archived_aggregate_csv_trusted": false,
+    "aggregate_issue": "Each independently launched seed process overwrote the same aggregate.csv. The archived aggregate tables contain only the last writer and are not evidence for the multi-seed result table."
+  },
+  "protocol_reconstructed_from_inferred_source_and_artifacts": {
+    "task": "modular addition mod 97 with a fixed 50 percent train split",
+    "final_training": {
+      "optimizer": "AdamW",
+      "learning_rate": 0.001,
+      "weight_decay": 1.0,
+      "betas": [0.9, 0.98],
+      "epsilon": 1e-08,
+      "budget_updates": 40000,
+      "rewind_point": "W0",
+      "thresholds": {
+        "memorization_train_accuracy": 0.95,
+        "grokking_validation_accuracy": 0.95,
+        "consecutive_evaluations": 2
+      },
+      "evaluation_schedule": {
+        "every_5_updates_below": 1000,
+        "every_25_updates_from": 1000
+      }
+    },
+    "one_shot": {
+      "dense_warmup_updates": 1200,
+      "magnitude_measurement": "after warm-up",
+      "mask_scope": "global magnitude over prunable weights",
+      "rewind_point": "W0",
+      "artifact_observation": "All 30 warm-ups grokked before update 1200. For each seed, summary, history, and metrics bytes are identical across the six nonzero sparsities.",
+      "scientific_label": "post-grok one-shot magnitude mask; not a pre-grok or pruning-at-initialization mask"
+    },
+    "imp": {
+      "prune_fraction_per_round": 0.2,
+      "updates_per_round": 400,
+      "mask_scope": "currently active prunable weights",
+      "weight_rewind_between_rounds": "W0 with cumulative mask",
+      "optimizer_state_rewind_between_rounds": false,
+      "optimizer_state_reset_between_rounds": false,
+      "scientific_label": "stateful-optimizer IMP variant",
+      "logging_limitation": "The same imp_phase files are overwritten on each Trainer.train call. Only the final round is preserved; captured stdout is absent, so intermediate-round memorization/generalization cannot be reconstructed."
+    }
+  },
+  "execution_fact_not_recorded_in_run_config": {
+    "early_stop": {
+      "classification": "HIGH-CONFIDENCE INFERRED",
+      "enabled": true,
+      "patience_evaluations": 500,
+      "scope": "sparse successful final-training cells only",
+      "evidence": "All 32 successful sparse cells with at least 500 post-confirmation evaluations available stop on the 500th inclusive evaluation from live grokking confirmation. Later successes and failures reach 40000; dense baselines are exempt in the inferred source.",
+      "current_head_default": false,
+      "reproduction_override": "training.early_stop.enabled=true"
+    }
+  },
+  "derived_outputs": {
+    "generator": "analysis/summarize_exp_b.py",
+    "primary_cell_table": "res/derived/exp_b_cells.csv",
+    "condition_summary": "res/derived/exp_b_summary.csv",
+    "one_shot_warmup_table": "res/derived/oneshot_pretrain_by_seed.csv",
+    "imp_last_round_table": "res/derived/imp_discovery_last_preserved_round.csv",
+    "failure_handling": "Negative event sentinels are converted to missing values before all timing statistics."
+  }
+}

@@ -1,7 +1,4 @@
-# configs/dataset/modular_mul.yaml
-# =================================
-# Modular multiplication: (a * b) mod p.  Extensibility seam (same machinery as
-# modular_add, different operation). Select with: dataset=modular_mul
+# Modular multiplication: (a * b) mod p. Select with dataset=modular_mul.
 name:       "modular_mul"
 p:          97
 operation:  "mul"

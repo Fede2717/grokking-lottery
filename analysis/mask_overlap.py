@@ -1,29 +1,9 @@
-"""
-analysis/mask_overlap.py — Reproduction-fidelity analysis (Minegishi et al. 2025)
-=================================================================================
+"""Compare Experiment A masks across training stages.
 
-Measures how the magnitude pruning mask CHANGES from memorization to
-generalization, and relates that change to the memorization→generalization gap.
-
-This reproduces the central *measured* claims of Minegishi et al. (TMLR 2025):
-structure matters; the sparse subnetwork eliminates the delay; and the change in
-the mask (Jaccard/IoU) tracks the test-accuracy improvement.
-
-Inputs (offline, no TensorBoard / wandb)
-----------------------------------------
-    * Stage masks saved by Experiment A under
-        results/<exp_a>/seed_*/masks/sp_*/mask_{init,mem,grok}.pt
-      (and grokked_mask.pt — the canonical post-generalization ticket).
-    * results/<exp>/aggregate.csv for the gap-vs-sparsity readout.
-
-Outputs
--------
-    results/figures/mask_overlap.png
-    results/<exp>/mask_overlap.csv
-
-Usage
------
-    python analysis/mask_overlap.py --exp-dir results/exp_a
+The script computes Jaccard overlap between masks saved at initialization,
+memorization, and grokking. It reads either a direct aggregate CSV or per-seed
+aggregate shards and writes ``mask_overlap.csv`` plus a figure. No Experiment A
+results from the current implementation are included in this repository.
 """
 
 from __future__ import annotations
@@ -40,9 +20,12 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.train import load_masks  # noqa: E402
+try:
+    from .aggregate_utils import read_aggregate_tables  # noqa: E402
+except ImportError:  # direct script execution
+    from aggregate_utils import read_aggregate_tables  # type: ignore  # noqa: E402
 
 
-# ---------------------------------------------------------------------------
 
 def jaccard(mask_a: dict, mask_b: dict) -> float:
     """
@@ -85,11 +68,9 @@ def collect_overlaps(exp_dir: Path) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def gap_vs_sparsity(aggregate_csv: Path) -> pd.DataFrame:
-    """Mean memorization→generalization gap per sparsity from aggregate.csv."""
-    if not aggregate_csv.exists():
-        return pd.DataFrame()
-    df = pd.read_csv(aggregate_csv)
+def gap_vs_sparsity(exp_dir: Path) -> pd.DataFrame:
+    """Mean observed memorization-to-generalization gap per sparsity."""
+    df = read_aggregate_tables(exp_dir)
     if "target_sparsity" not in df or "grokking_gap" not in df:
         return pd.DataFrame()
     valid = df[df["grokking_gap"] >= 0]
@@ -101,11 +82,10 @@ def gap_vs_sparsity(aggregate_csv: Path) -> pd.DataFrame:
     )
 
 
-# ---------------------------------------------------------------------------
 
 def plot(overlaps: pd.DataFrame, gaps: pd.DataFrame, out_path: Path) -> None:
     fig, axes = plt.subplots(1, 2, figsize=(12, 4.5))
-    fig.suptitle("Mask overlap and the memorization→generalization gap", fontweight="bold")
+    fig.suptitle("Mask overlap and the memorization-to-generalization gap", fontweight="bold")
 
     ax = axes[0]
     if not overlaps.empty:
@@ -132,7 +112,7 @@ def plot(overlaps: pd.DataFrame, gaps: pd.DataFrame, out_path: Path) -> None:
         ax.text(0.5, 0.5, "no measured gaps yet", ha="center", va="center", transform=ax.transAxes)
         ax.set_ylabel("Mean grokking gap (steps)")
     ax.set_xlabel("Sparsity (%)")
-    ax.set_title("Gap vs sparsity (delay elimination)")
+    ax.set_title("Observed gap vs sparsity")
     ax.grid(True, alpha=0.3)
 
     fig.tight_layout()
@@ -152,7 +132,7 @@ def main() -> None:
     figures_dir = Path(args.figures_dir) if args.figures_dir else exp_dir.parent / "figures"
 
     overlaps = collect_overlaps(exp_dir)
-    gaps = gap_vs_sparsity(exp_dir / "aggregate.csv")
+    gaps = gap_vs_sparsity(exp_dir)
 
     if not overlaps.empty:
         out_csv = exp_dir / "mask_overlap.csv"

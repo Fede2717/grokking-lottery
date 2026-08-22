@@ -1,18 +1,8 @@
-"""
-analysis/plot_exp_a.py — Experiment A figures (offline, CSV-only)
-================================================================
+"""Plot Experiment A aggregate results.
 
-Reads results/<exp_a>/aggregate.csv and renders:
-    * Circuit survival: validation accuracy of the pruned post-grokking network
-      WITHOUT retraining, vs sparsity (does the generalizing circuit survive?).
-    * Rewind comparison: steps to generalization vs sparsity for the grokked
-      ticket rewound to W_0 vs W_mem, against the dense baseline.
-
-Depends only on pandas/matplotlib (no TensorBoard / wandb).
-
-Usage
------
-    python analysis/plot_exp_a.py --exp-dir results/exp_a
+The two panels show validation accuracy immediately after pruning and grokking
+steps after rewinding the selected mask to ``W0`` or ``W_mem``. The script reads
+a direct aggregate CSV or per-seed shards.
 """
 
 from __future__ import annotations
@@ -25,6 +15,11 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import pandas as pd
 
+try:
+    from .aggregate_utils import read_aggregate_tables
+except ImportError:  # direct script execution
+    from aggregate_utils import read_aggregate_tables
+
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -34,16 +29,14 @@ def main() -> None:
 
     exp_dir = Path(args.exp_dir)
     figures_dir = Path(args.figures_dir) if args.figures_dir else exp_dir.parent / "figures"
-    agg = exp_dir / "aggregate.csv"
-    if not agg.exists():
-        print(f"  no aggregate.csv at {agg}; run experiments/exp_a first.")
+    df = read_aggregate_tables(exp_dir)
+    if df.empty:
+        print(f"  no aggregate tables under {exp_dir}; run experiments/exp_a first.")
         return
-
-    df = pd.read_csv(agg)
     fig, axes = plt.subplots(1, 2, figsize=(13, 5))
-    fig.suptitle("Experiment A — grok first, then prune + rewind", fontweight="bold")
+    fig.suptitle("Experiment A: grok, prune, and rewind", fontweight="bold")
 
-    # ── Circuit survival (no retraining) ─────────────────────────────────────
+    # Circuit survival (no retraining)
     ax = axes[0]
     if "circuit_survival_acc" in df:
         surv = (df.dropna(subset=["circuit_survival_acc"])
@@ -59,7 +52,7 @@ def main() -> None:
     ax.set_title("Generalizing-circuit survival under pruning", fontsize=10, fontweight="bold")
     ax.grid(True, axis="y", alpha=0.3)
 
-    # ── Rewind comparison ────────────────────────────────────────────────────
+    # Rewind comparison
     ax = axes[1]
     rewind_rows = df[df.get("rewind").isin(["W_init", "W_mem"])] if "rewind" in df else pd.DataFrame()
     for label, sub in (rewind_rows.groupby("rewind") if not rewind_rows.empty else []):

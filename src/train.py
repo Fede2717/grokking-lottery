@@ -1,31 +1,9 @@
-"""
-src/train.py — Training Engine
-==============================
+"""Training, evaluation schedules, event detection, and checkpoints.
 
-Responsibilities
-----------------
-    * Step-based (full-batch by default) training loop for the grokking setup.
-    * A TWO-SCHEDULE measurement design (this is the fix for the old
-      "measurement floor" that pinned every fast condition to step 300):
-
-        cheap eval     — train/val accuracy + loss, on a fine-early schedule
-                         (``EvalSchedule``: every few steps early, coarser later).
-        expensive      — Fourier / Hessian / weight-norm metrics, on the
-                         independent ``metrics_every`` schedule.
-
-    * POST-HOC detection of memorization / grokking / gap from the logged
-      accuracy curves (``detect_threshold_crossing``), so the reported step is
-      the first genuine threshold crossing — not an artifact of the log period.
-    * Unified logging via :class:`src.logging_utils.MetricLogger` (CSV always on;
-      TensorBoard by default; wandb opt-in).
-    * Disk checkpointing for LTH weight rewinding (the canonical source of truth
-      is a ``.pt`` file, never an in-memory dict) and grokked-mask export.
-
-Terminology
------------
-    Pruned / sparse subnetworks ELIMINATE the memorization→generalization delay
-    (gap → 0).  They do not "grok faster" in the sense of a smaller constant; the
-    delay itself disappears.  Reported numbers must respect that distinction.
+Accuracy and loss use a fine early evaluation schedule and a coarser later one.
+Costlier metrics use an independent interval. Memorization and grokking events
+are detected after training from the recorded accuracy curves. Each run writes
+CSV metrics, JSON history and summary files, and requested checkpoints.
 """
 
 from __future__ import annotations
@@ -51,9 +29,7 @@ from src.metrics import (
 )
 
 
-# ===========================================================================
 # Disk checkpoint + mask helpers
-# ===========================================================================
 
 def save_init_checkpoint(
     model: nn.Module,
@@ -63,9 +39,8 @@ def save_init_checkpoint(
     """
     Save exact step-0 model weights to disk BEFORE any gradient update.
 
-    This is the canonical source of truth for LTH weight rewinding.  Loading
-    from disk (not an in-memory dict) prevents silent state corruption across
-    Python processes and notebook restarts.  CALL BEFORE optimizer.step().
+    The saved file is the rewind source used by the pruning code. Call this
+    before the first optimizer update.
     """
     run_dir = Path(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -121,9 +96,7 @@ def load_masks(path: str | Path) -> dict[str, torch.Tensor]:
     return {k: v.float() for k, v in raw.items()}
 
 
-# ===========================================================================
-# Evaluation schedule (Phase 1: fine early, coarse later)
-# ===========================================================================
+# Evaluation schedule
 
 @dataclass
 class EvalSchedule:
@@ -170,12 +143,11 @@ def detect_threshold_crossing(
     window: int,
 ) -> int:
     """
-    POST-HOC event detection from a logged curve.
+    Detect an event from a logged curve after training.
 
-    Returns the FIRST step that begins a run of ``window`` consecutive logged
-    evaluations all ``>= threshold`` (i.e. the genuine crossing step), or -1 if
-    no such run exists.  This decouples the reported step from the log period:
-    if the curve truly crosses at step ~8, this returns ~8, not log_every*window.
+    Returns the FIRST logged step that begins a run of ``window`` consecutive
+    logged evaluations all ``>= threshold``, or -1 if no such run exists. The
+    event remains quantized to the evaluation schedule.
     """
     window = max(1, int(window))
     run = 0
@@ -189,9 +161,7 @@ def detect_threshold_crossing(
     return -1
 
 
-# ===========================================================================
 # Training history
-# ===========================================================================
 
 @dataclass
 class TrainingHistory:
@@ -210,7 +180,7 @@ class TrainingHistory:
     weight_l2: list[float] = field(default_factory=list)
     weight_l1: list[float] = field(default_factory=list)
 
-    # Populated POST-HOC from the curves above.
+    # Populated from the completed curves.
     memorization_step: int = -1
     grokking_step: int = -1
 
@@ -262,9 +232,7 @@ class TrainingHistory:
             json.dump(self.to_dict(), f, indent=2)
 
 
-# ===========================================================================
 # Trainer
-# ===========================================================================
 
 class Trainer:
     """
@@ -323,7 +291,6 @@ class Trainer:
 
         self.run_dir.mkdir(parents=True, exist_ok=True)
 
-    # ------------------------------------------------------------------
 
     @torch.no_grad()
     def evaluate(self, loader: DataLoader) -> tuple[float, float]:
@@ -360,7 +327,6 @@ class Trainer:
             return None
         return compute_fourier_features(self.model.get_embedding_weights(), self.p)
 
-    # ------------------------------------------------------------------
 
     def train(
         self,
@@ -373,7 +339,7 @@ class Trainer:
         """
         Run up to ``n_steps`` full-batch gradient updates.
 
-        Memorization / grokking steps are computed POST-HOC from the logged
+        Memorization and grokking steps are computed from the logged
         curves after the loop; a lightweight live detector is used only to
         trigger checkpoint/mask saves and (optionally) early stopping.
         """
@@ -402,7 +368,7 @@ class Trainer:
                 do_eval = self.eval_schedule.should_eval(step) or step == n_steps
                 do_metrics = do_eval and (step % self.metrics_every == 0 or step == n_steps)
 
-                # ── Forward + backward (skip the synthetic final eval-only step) ──
+                # Forward + backward (skip the synthetic final eval-only step)
                 grad_norm = None
                 if step < n_steps:
                     x, y = next(data_iter)
@@ -434,7 +400,7 @@ class Trainer:
                 if not do_eval:
                     continue
 
-                # ── Cheap eval ────────────────────────────────────────────
+                # Cheap eval
                 train_loss, train_acc = self.evaluate(self.train_loader)
                 val_loss, val_acc = self.evaluate(self.val_loader)
                 sparsity = compute_sparsity_from_masks(masks) if masks else 0.0
@@ -454,7 +420,7 @@ class Trainer:
                     "sparsity": sparsity,
                 }
 
-                # ── Expensive metrics ─────────────────────────────────────
+                # Expensive metrics
                 if do_metrics:
                     norms = compute_weight_norms(self.model, masks)
                     history.metric_steps.append(step)
@@ -478,11 +444,11 @@ class Trainer:
                             )
                             scalars["hessian/lambda_max"] = lam
                         except Exception:
-                            pass  # fragile metric — never fatal
+                            pass  # Leave training running if this optional metric fails.
 
                 logger.log_scalars(step, scalars)
 
-                # ── Live detection (drives checkpoint/mask saves only) ─────
+                # Live detection (drives checkpoint/mask saves only)
                 cons_mem = cons_mem + 1 if train_acc >= self.mem_threshold else 0
                 if cons_mem == self.grok_window and "memorization" not in history.checkpoint_paths:
                     self._record_fourier(history, "memorization")
@@ -515,12 +481,15 @@ class Trainer:
                         f"vl={val_acc:.3f} | sp={sparsity:.2f} | {time.time()-t0:.0f}s"
                     )
 
-                # ── Early stop (sparse / non-baseline only) ────────────────
+                # Early stop (sparse / non-baseline only)
                 if (self._es_enabled and not self.is_baseline and live_grok_step >= 0):
                     post_grok_logged += 1
                     if post_grok_logged >= self._es_patience:
                         if verbose:
-                            print(f"  Early stop: {self._es_patience} logged steps past grokking.")
+                            print(
+                                f"  Early stop: {self._es_patience} logged evaluations "
+                                "including grokking confirmation."
+                            )
                         break
 
         finally:
@@ -547,12 +516,11 @@ class Trainer:
 
         if verbose:
             print(
-                f"  POST-HOC  mem={history.memorization_step}  "
+                f"  detected  mem={history.memorization_step}  "
                 f"grok={history.grokking_step}  gap={history.grokking_gap}"
             )
         return history
 
-    # ------------------------------------------------------------------
 
     def _record_fourier(self, history: TrainingHistory, tag: str) -> None:
         fd = self._fourier_dict()
@@ -560,7 +528,7 @@ class Trainer:
             history.fourier_data[tag] = fd
 
     def _write_summary(self, history: TrainingHistory) -> None:
-        """Write the per-run summary.json (config + headline fields)."""
+        """Write the per-run summary.json."""
         summary = {
             "config": history.config_summary,
             "actual_sparsity": history.config_summary.get("sparsity", 0.0),
@@ -577,9 +545,7 @@ class Trainer:
             json.dump(summary, f, indent=2)
 
 
-# ===========================================================================
-# Optimizer factory (Phase 5: config-driven, with registration seams)
-# ===========================================================================
+# Optimizer factory
 
 def _split_decay_params(model: nn.Module):
     """Weight decay applies to >=2-D weights only (never biases / LayerNorm)."""
@@ -607,12 +573,11 @@ def make_optimizer(
 
     Implemented
     -----------
-        "adamw"  — default; weight decay excluded from 1-D / LayerNorm params.
+        "adamw": default; weight decay excluded from 1-D and LayerNorm params.
 
-    Registration seams (intentionally not implemented yet)
-    ------------------------------------------------------
-        "sgd", "adam", "muon" — add a branch here when needed; the param-group
-        split above already provides the decay/no-decay seam they would reuse.
+    Listed but not implemented
+    --------------------------
+        "sgd", "adam", "muon".
     """
     name = (name or "adamw").lower()
     decay, no_decay = _split_decay_params(model)
@@ -628,7 +593,7 @@ def make_optimizer(
 
     if name in ("sgd", "adam", "muon"):
         raise NotImplementedError(
-            f"Optimizer {name!r} is a registration seam, not yet implemented. "
+            f"Optimizer {name!r} is not implemented. "
             "Add a branch in src.train.make_optimizer."
         )
 

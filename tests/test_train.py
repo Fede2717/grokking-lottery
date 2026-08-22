@@ -1,4 +1,4 @@
-"""Training/measurement: post-hoc detection is NOT floored to the log period."""
+"""Training schedules and threshold detection from logged evaluations."""
 import tempfile
 from pathlib import Path
 

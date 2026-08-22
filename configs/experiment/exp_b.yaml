@@ -1,9 +1,6 @@
-# configs/experiment/exp_b.yaml
-# ==============================
-# Experiment B — EXTENSION: find a sparse ticket (IMP) BEFORE grokking, then
-# train it. Tests whether a sparse subnetwork ELIMINATES the
-# memorization→generalization delay (gap → 0), per Minegishi et al. (TMLR 2025).
+# Experiment B: compare a stateful-optimizer IMP variant and dense-warm-up
+# one-shot magnitude masks after rewinding weights to initialization.
 name:        "exp_b"
-description: "IMP ticket discovery before grokking, then full grokking phase"
+description: "Magnitude-mask discovery, rewind to W0, then final grokking phase"
 
 run_one_shot_ablation: true   # also run one-shot magnitude pruning as an ablation

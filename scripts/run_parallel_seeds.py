@@ -1,34 +1,13 @@
 #!/usr/bin/env python3
 """
-scripts/run_parallel_seeds.py
-==============================
-Parallel Seed Launcher for 2× NVIDIA T4 (Kaggle environment)
-=============================================================
+Run experiment seeds as isolated subprocesses on one or more GPUs.
 
-Distributes N experiment seeds across GPUs concurrently using Python subprocess
-— NO DDP overhead, NO NCCL, NO torch.distributed.
+Each subprocess receives its own ``CUDA_VISIBLE_DEVICES`` and ``GROK_SEED``
+values. The launcher does not use DDP or initialize external logging accounts.
 
-Runs with NO external accounts or keys: logging defaults to TensorBoard/CSV and
-the launcher never injects WANDB_API_KEY or assumes a wandb login. (Opt into
-wandb only via logging.backend=wandb wandb.enabled=true, after `wandb login`.)
-
-Each seed runs as a completely independent process with its own:
-    • CUDA_VISIBLE_DEVICES  (limits which physical GPU it uses; harmless on CPU)
-    • GROK_SEED             (pins the seed for that process; read by src.runner)
-    • Hydra output_dir      (separate result directory per seed)
-
-GPU assignment
---------------
-    Seeds are round-robin assigned to GPUs:
-        num_seeds=5 → seeds 1,3,5 on GPU-0 | seeds 2,4 on GPU-1
-    (Sequential within each GPU; no shared memory between processes.)
-
-    Example with default 5 seeds:
-        GPU-0: seed_0, seed_2, seed_4  (3 processes, sequential)
-        GPU-1: seed_1, seed_3          (2 processes, sequential)
-
-    The two GPU queues run concurrently (in parallel via Python threads),
-    so total wall-clock time ≈ max(time_on_GPU0, time_on_GPU1).
+One worker thread per GPU draws jobs from a shared queue. A GPU receives the next
+seed when its current subprocess finishes, so assignment depends on run time.
+Each GPU runs at most one subprocess at a time.
 
 Usage
 -----
@@ -44,18 +23,9 @@ Usage
     # Debug mode (fast, 2 seeds)
     python scripts/run_parallel_seeds.py --debug
 
-    # Dry run — print commands without executing
+    # Print commands without executing them
     python scripts/run_parallel_seeds.py --dry-run
 
-Arguments
----------
-    --experiment     Which experiment to run: exp_b | exp_a | exp_c | all
-    --num-seeds      Number of independent seeds (default: 5)
-    --base-seed      Starting seed value (default: 0)
-    --num-gpus       Number of available GPUs (default: 2)
-    --extra-args     Additional Hydra overrides passed to all runs
-    --debug          Enable fast debug config (overrides n_grok_steps etc.)
-    --dry-run        Print subprocess commands without executing
 """
 
 from __future__ import annotations
@@ -70,9 +40,7 @@ from queue import Queue
 from pathlib import Path
 
 
-# ===========================================================================
 # GPU Queue Worker
-# ===========================================================================
 
 def _worker(
     gpu_id:   int,
@@ -99,7 +67,7 @@ def _worker(
         print(f"  [GPU-{gpu_id}] seed={seed}  starting...\n    CMD: {cmd_str}\n")
 
         if dry_run:
-            print(f"  [GPU-{gpu_id}] seed={seed}  DRY RUN — not executed.\n")
+            print(f"  [GPU-{gpu_id}] seed={seed}  DRY RUN: not executed.\n")
             with lock:
                 results.append((seed, 0, "dry_run"))
             job_queue.task_done()
@@ -129,15 +97,14 @@ def _worker(
             job_queue.task_done()
 
 
-# ===========================================================================
 # Main launcher
-# ===========================================================================
 
 EXPERIMENT_MODULES = {
     "exp_b": "experiments.exp_b_lth_then_grok",
     "exp_a": "experiments.exp_a_grok_then_prune",
     "exp_c": "experiments.exp_c_wd_ablation",
 }
+MODULE_EXPERIMENTS = {module: experiment for experiment, module in EXPERIMENT_MODULES.items()}
 
 
 def build_command(
@@ -155,6 +122,10 @@ def build_command(
     Hydra overrides are appended as positional arguments.
     """
     cmd = [sys.executable, "-m", module]
+
+    # Selecting a launcher experiment must also select its Hydra config group.
+    # Without this, exp_a/exp_c modules compose the root default (exp_b).
+    cmd.append(f"experiment={MODULE_EXPERIMENTS[module]}")
 
     # Hydra output dir: separate per seed so runs don't collide
     cmd.append(f"hydra.run.dir=outputs/{module.split('.')[-1]}/seed_{seed}")
@@ -227,7 +198,7 @@ def run_parallel(
         for t in threads:
             t.join()
 
-    # ── Final summary ──────────────────────────────────────────────────────
+    # Final summary
     print(f"\n{'='*65}")
     print("  Launcher Summary")
     print(f"{'='*65}")
@@ -235,6 +206,11 @@ def run_parallel(
     n_fail = len(all_results) - n_ok
     for seed, rc, status in sorted(all_results, key=lambda r: r[0]):
         print(f"  seed={seed:3d}  {status}")
+    if dry_run:
+        print(f"\n  Total: {len(all_results)} commands | 0 executed")
+        print("\n  Dry run complete.")
+        return
+
     print(f"\n  Total: {len(all_results)} runs | {n_ok} succeeded | {n_fail} failed")
 
     if n_fail > 0:
@@ -244,9 +220,7 @@ def run_parallel(
         print("\n  All runs completed successfully.")
 
 
-# ===========================================================================
 # Entry point
-# ===========================================================================
 
 def main() -> None:
     # Keep prints safe on a Windows cp1252 console; no-op elsewhere.
@@ -257,7 +231,7 @@ def main() -> None:
             pass
 
     parser = argparse.ArgumentParser(
-        description="Parallel seed launcher for Grokking × LTH experiments",
+        description="Run experiment seeds across one or more GPUs",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )

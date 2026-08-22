@@ -1,9 +1,7 @@
-# configs/experiment/exp_c.yaml
-# ==============================
-# Experiment C — ABLATION: weight-decay x sparsity grid, using ONE-SHOT MAGNITUDE
-# PRUNING (NOT IMP). Tests whether weight decay and sparsity are substitutes or
+# Experiment C: weight-decay x sparsity grid using one-shot magnitude
+# pruning rather than IMP. Tests whether weight decay and sparsity are substitutes or
 # complements for closing the grokking gap. The short pretraining before pruning
-# uses weight_decay=0 for ALL cells to remove the weight-decay confound; the grid
+# uses weight_decay=0 for every cell; the grid
 # value is applied only in the grokking phase.
 name:        "exp_c"
 description: "2D grid: weight_decay x sparsity (one-shot magnitude pruning)"

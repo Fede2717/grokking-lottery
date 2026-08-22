@@ -1,14 +1,8 @@
-"""
-analysis/plot_exp_c_heatmap.py — Experiment C figures (offline, CSV-only)
-========================================================================
+"""Plot Experiment C aggregate results.
 
-Reads results/<exp_c>/aggregate.csv and renders the weight-decay × sparsity
-heatmaps (mean grokking step and mean final validation accuracy). Depends only
-on pandas/matplotlib — no TensorBoard or wandb — so plots reproduce from CSV.
-
-Usage
------
-    python analysis/plot_exp_c_heatmap.py --exp-dir results/exp_c
+The script reads a direct aggregate CSV or per-seed shards and draws heatmaps of
+mean grokking step and final validation accuracy across weight decay and
+sparsity.
 """
 
 from __future__ import annotations
@@ -21,6 +15,11 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+
+try:
+    from .aggregate_utils import read_aggregate_tables
+except ImportError:  # direct script execution
+    from aggregate_utils import read_aggregate_tables
 
 
 def _grid(df: pd.DataFrame, value: str, only_grokked: bool) -> tuple:
@@ -64,14 +63,12 @@ def main() -> None:
 
     exp_dir = Path(args.exp_dir)
     figures_dir = Path(args.figures_dir) if args.figures_dir else exp_dir.parent / "figures"
-    agg = exp_dir / "aggregate.csv"
-    if not agg.exists():
-        print(f"  no aggregate.csv at {agg}; run experiments/exp_c first.")
+    df = read_aggregate_tables(exp_dir)
+    if df.empty:
+        print(f"  no aggregate tables under {exp_dir}; run experiments/exp_c first.")
         return
-
-    df = pd.read_csv(agg)
     fig, axes = plt.subplots(1, 2, figsize=(13, 5))
-    fig.suptitle("Experiment C — weight decay × sparsity (one-shot magnitude pruning)",
+    fig.suptitle("Experiment C: weight decay x sparsity (one-shot magnitude pruning)",
                  fontweight="bold")
 
     sg_grid, sp_vals, wd_vals = _grid(df, "grokking_step", only_grokked=True)

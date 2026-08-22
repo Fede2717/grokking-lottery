@@ -5,12 +5,12 @@ build-backend = "hatchling.build"
 [project]
 name        = "grokking-lottery"
 version     = "0.2.0"
-description = "Partial reproduction of Minegishi et al. (TMLR 2025) bridging Lottery Ticket and Grokking, plus original ablations."
+description = "Experiments on grokking with magnitude-pruned subnetworks."
 readme      = "README.md"
 license     = { text = "MIT" }
 requires-python = ">=3.10"
 
-# Runtime dependencies — only what the code actually imports.
+# Runtime dependencies used by the package.
 dependencies = [
     "torch>=2.1.0",
     "numpy>=1.26.0",
@@ -38,7 +38,7 @@ dev = [
     "mypy>=1.7.0",
 ]
 
-# ── uv configuration ──────────────────────────────────────────────────────────
+# uv configuration
 [tool.uv]
 index-url = "https://pypi.org/simple"
 
@@ -47,11 +47,11 @@ index-url = "https://pypi.org/simple"
 #   uv pip install torch --index-url https://download.pytorch.org/whl/cu121
 # (left commented so CPU-only dev machines resolve the default wheel)
 
-# ── Hatch build ───────────────────────────────────────────────────────────────
+# Hatch build
 [tool.hatch.build.targets.wheel]
 packages = ["src", "experiments", "analysis"]
 
-# ── Ruff linter ───────────────────────────────────────────────────────────────
+# Ruff linter
 [tool.ruff]
 line-length = 100
 target-version = "py310"
@@ -60,7 +60,7 @@ target-version = "py310"
 select = ["E", "F", "W", "I"]
 ignore = ["E501"]
 
-# ── mypy ──────────────────────────────────────────────────────────────────────
+# mypy
 [tool.mypy]
 python_version         = "3.10"
 ignore_missing_imports = true

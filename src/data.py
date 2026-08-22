@@ -1,27 +1,9 @@
-"""
-src/data.py — Modular Arithmetic Dataset for Grokking × LTH Research
-======================================================================
+"""Modular arithmetic datasets for the grokking experiments.
 
-Implements the canonical grokking dataset from Power et al. (2022):
-    Task : predict (a OP b) mod p, for a, b in {0, ..., p-1}
-    Split: 50 % train / 50 % val  (shuffled, reproducible)
-
-Vocabulary layout
------------------
-    0  ..  p-1  : number tokens
-    p            : operation token  (e.g. '+')
-    p+1          : equals token     ('=')
-    Total vocab  : p + 2  (99 at default p = 97)
-
-Each sample
------------
-    x : LongTensor (4,)   [a, op_tok, b, eq_tok]
-    y : LongTensor scalar   (a OP b) mod p
-
-References
-----------
-    Power et al. (2022) "Grokking: Generalization Beyond Overfitting on
-    Small Algorithmic Datasets." arXiv:2201.02177
+The dataset enumerates all ordered pairs ``(a, b)`` and predicts
+``(a OP b) mod p`` from ``[a, OP, b, =]``. Number tokens occupy ``0..p-1``;
+the operation and equals tokens are ``p`` and ``p+1``. A seeded permutation is
+split into training and validation subsets.
 """
 
 from __future__ import annotations
@@ -31,9 +13,7 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 
 
-# ---------------------------------------------------------------------------
 # Dataset
-# ---------------------------------------------------------------------------
 
 class ModularArithmeticDataset(Dataset):
     """
@@ -48,9 +28,7 @@ class ModularArithmeticDataset(Dataset):
     seed       : Random seed for reproducible shuffling.
     """
 
-    # Task-registration seam: add a new modular operation here (and a matching
-    # configs/dataset/<name>.yaml) to extend the task family. The rest of the
-    # pipeline is operation-agnostic.
+    # Add new modular operations here and in configs/dataset/.
     OPERATIONS: dict[str, callable] = {
         "add": lambda a, b, p: (a + b) % p,
         "sub": lambda a, b, p: (a - b) % p,
@@ -77,7 +55,7 @@ class ModularArithmeticDataset(Dataset):
         self.eq_token   = p + 1
         self.n_classes  = p            # output classes = {0 .. p-1}
 
-        # --- Generate full dataset (all p² pairs) -------------------------
+        # Generate full dataset (all p² pairs)
         pairs: list[tuple[int, int, int]] = [
             (a, b, self.op_fn(a, b, p))
             for a in range(p)
@@ -93,7 +71,6 @@ class ModularArithmeticDataset(Dataset):
         n_train   = int(len(pairs) * train_frac)
         self.data = pairs[:n_train] if split == "train" else pairs[n_train:]
 
-    # ------------------------------------------------------------------
 
     def __len__(self) -> int:
         return len(self.data)
@@ -112,9 +89,7 @@ class ModularArithmeticDataset(Dataset):
         )
 
 
-# ---------------------------------------------------------------------------
 # DataLoader factory
-# ---------------------------------------------------------------------------
 
 def get_dataloaders(
     p: int = 97,
@@ -131,9 +106,8 @@ def get_dataloaders(
 
     Parameters
     ----------
-    full_batch : When True (canonical grokking setup), the train loader yields
-                 the ENTIRE training set as a single batch each step — i.e.
-                 full-batch gradient descent. ``batch_size`` is then ignored for
+    full_batch : When True, the train loader yields the full training set as one
+                 batch per step. ``batch_size`` is then ignored for
                  the train loader. The val loader always evaluates in one batch.
 
     Returns
@@ -167,9 +141,7 @@ def get_dataloaders(
     return train_loader, val_loader
 
 
-# ---------------------------------------------------------------------------
 # Quick sanity check
-# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     train_loader, val_loader = get_dataloaders(p=97, batch_size=512)

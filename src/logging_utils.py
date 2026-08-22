@@ -1,35 +1,15 @@
-"""
-src/logging_utils.py — Unified Metric Logging
-==============================================
+"""CSV metric logging with optional TensorBoard or Weights & Biases output.
 
-A single abstraction, ``MetricLogger``, fans every scalar out to all active
-sinks through one call::
-
-    logger.log_scalars(step, {"train/acc": 0.9, "val/acc": 0.5})
-
-Because every sink receives the *same* ``{tag: value}`` dict, the tags are
-identical across sinks — which guarantees that the offline CSV plots match
-TensorBoard (and Weights & Biases, if enabled) exactly.
-
-Sinks
------
-    CSV          ALWAYS ON, regardless of the chosen viewer backend.  Appends to
-                 ``<run_dir>/metrics.csv`` in LONG format with columns
-                 ``step,tag,value`` (tag names identical to the TB tags).
-    tensorboard  DEFAULT viewer.  Writes TB event files to ``<run_dir>/tb/``.
-    none         No live viewer.  CSV (and the run's summary.json, written by the
-                 Trainer) are still produced.
-    wandb        OPTIONAL, opt-in only.  Requires an explicitly-passed wandb run;
-                 the logger never logs in or reads ``WANDB_API_KEY`` itself.
-
-The viewer backend is selected from ``configs/config.yaml`` via
-``logging.backend`` ∈ {tensorboard, csv, none, wandb}.
+CSV is written for every backend. TensorBoard is the default live viewer.
+Weights & Biases requires an explicit run object and does not perform login or
+read credentials in this module.
 """
 
 from __future__ import annotations
 
 import csv
 import json
+import os
 from pathlib import Path
 from typing import Mapping, Sequence
 
@@ -80,14 +60,14 @@ class MetricLogger:
         self.run_dir.mkdir(parents=True, exist_ok=True)
         self.backend = backend
 
-        # ── CSV sink (ALWAYS ON) ──────────────────────────────────────────
+        # CSV sink
         self.csv_path = self.run_dir / csv_filename
         self._csv_file = open(self.csv_path, "w", newline="")
         self._csv_writer = csv.writer(self._csv_file)
         self._csv_writer.writerow(["step", "tag", "value"])
         self._csv_file.flush()
 
-        # ── Optional live viewer sink ─────────────────────────────────────
+        # Optional live viewer sink
         self._tb = None
         self._wandb_run = None
 
@@ -101,8 +81,8 @@ class MetricLogger:
             self._tb = SummaryWriter(log_dir=str(self.run_dir / "tb"))
 
         elif backend == "wandb":
-            # Opt-in only. The caller is responsible for wandb.init(); we never
-            # log in or touch WANDB_API_KEY here.
+            # Opt-in only. The caller owns wandb.init(); this module does not
+            # log in or touch WANDB_API_KEY.
             if wandb_run is None:
                 raise ValueError(
                     "logging.backend='wandb' requires an explicit wandb run to "
@@ -110,11 +90,10 @@ class MetricLogger:
                 )
             self._wandb_run = wandb_run
 
-    # ------------------------------------------------------------------
 
     def log_scalars(self, step: int, scalars: Mapping[str, float]) -> None:
         """Fan a {tag: value} dict out to every active sink at ``step``."""
-        # CSV (always on) — long format, one row per (step, tag).
+        # CSV uses long format with one row per (step, tag).
         for tag, value in scalars.items():
             if value is None:
                 continue
@@ -134,7 +113,6 @@ class MetricLogger:
             if payload:
                 self._wandb_run.log(payload, step=int(step))
 
-    # ------------------------------------------------------------------
 
     def flush(self) -> None:
         self._csv_file.flush()
@@ -158,18 +136,16 @@ class MetricLogger:
         self.close()
 
 
-# ===========================================================================
-# Per-experiment aggregate export (headline plots read this offline)
-# ===========================================================================
+# Per-experiment aggregate export
 
 def write_aggregate_csv(path: str | Path, rows: Sequence[Mapping]) -> Path:
     """
-    Write one row per (condition, seed) to ``results/<exp>/aggregate.csv``.
+    Write one row per (condition, seed) to the requested CSV path.
 
     Columns are the union of all keys across rows (stable, first-seen order),
     so experiment params (sparsity, weight_decay, method, seed) and summary
     fields (grokking_step, grokking_gap, final_val_acc, ...) all land here for
-    the offline headline plotters — no TensorBoard / wandb dependency.
+    offline analysis without a TensorBoard or wandb dependency.
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -186,12 +162,31 @@ def write_aggregate_csv(path: str | Path, rows: Sequence[Mapping]) -> Path:
     return path.resolve()
 
 
+def write_run_aggregate_csv(path: str | Path, rows: Sequence[Mapping]) -> Path:
+    """Write a process-safe aggregate table for direct or parallel execution.
+
+    The parallel launcher sets ``GROK_SEED`` in each subprocess.  Those workers
+    write distinct ``aggregate_seed_<seed>.csv`` shards instead of racing on a
+    shared ``aggregate.csv``.  A normal process without that environment
+    variable keeps the historical aggregate path.
+    """
+    path = Path(path)
+    parallel_seed = os.environ.get("GROK_SEED")
+    if parallel_seed is not None:
+        try:
+            seed = int(parallel_seed)
+        except ValueError as exc:
+            raise ValueError(f"GROK_SEED must be an integer, got {parallel_seed!r}") from exc
+        path = path.with_name(f"{path.stem}_seed_{seed}{path.suffix}")
+    return write_aggregate_csv(path, rows)
+
+
 def summary_to_aggregate_row(summary: Mapping, extra: Mapping | None = None) -> dict:
     """
     Flatten a per-run ``summary.json`` dict into a single aggregate row.
 
     The nested ``config`` block is promoted to top-level columns (e.g. sparsity,
-    weight_decay, method, seed) and merged with the headline summary fields.
+    weight_decay, method, seed) and merged with the summary fields.
     """
     row: dict = {}
     cfg = summary.get("config", {}) or {}

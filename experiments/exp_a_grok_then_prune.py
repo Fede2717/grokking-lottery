@@ -1,27 +1,10 @@
-"""
-experiments/exp_a_grok_then_prune.py
-====================================
-Experiment A — CONTROL: grok first, then prune + rewind (the faithful
-"grokked ticket").
+"""Experiment A: train densely, prune after grokking, and rewind.
 
-What it does
-------------
-    1. Train a DENSE model to full grokking; checkpoints are saved at
-       initialization (W_0), memorization (W_mem) and grokking (W_grok).
-    2. Circuit survival: prune W_grok at each sparsity and evaluate WITHOUT
-       retraining (does the generalizing circuit survive pruning?).
-    3. Grokked ticket: rank magnitudes on W_grok to build the mask (the
-       post-generalization ticket), rewind to W_0 vs W_mem, and retrain. The
-       grokked mask is saved per sparsity for the mask-overlap analysis.
-    4. Masks are also extracted at the memorization and grokking stages and
-       saved, so analysis/mask_overlap.py can measure how the magnitude mask
-       changes from memorization → generalization.
-
-Mapping to Minegishi et al. (TMLR 2025)
----------------------------------------
-This is the canonical direction: a subnetwork extracted AFTER generalization.
-Exp B (prune before grokking) is the extension. Plots are produced offline by
-analysis/plot_exp_a.py from the CSV / summary.json / aggregate.csv.
+The dense run saves initialization, memorization, and grokking checkpoints. At
+each sparsity, the driver measures the immediate validation accuracy of the
+pruned grokking checkpoint and retrains its mask from either initialization or
+the memorization checkpoint. It also saves stage-specific masks for
+``analysis/mask_overlap.py``.
 """
 
 from __future__ import annotations
@@ -35,7 +18,7 @@ from omegaconf import DictConfig
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.logging_utils import load_summary, summary_to_aggregate_row, write_aggregate_csv
+from src.logging_utils import load_summary, summary_to_aggregate_row, write_run_aggregate_csv
 from src.metrics import compute_grokking_metrics
 from src.prune import (
     apply_global_magnitude_pruning, apply_masks, compute_sparsity,
@@ -75,7 +58,7 @@ def run_seed(cfg: DictConfig, seed: int, device, exp_dir: Path) -> list[dict]:
     base.mkdir(parents=True, exist_ok=True)
     rows: list[dict] = []
 
-    # ── Phase 1: dense → grokking ───────────────────────────────────────────
+    # Dense training
     seed_everything(seed, device)
     train_loader, val_loader = build_dataloaders(cfg, seed)
     model = build_model(cfg, device)
@@ -113,22 +96,22 @@ def run_seed(cfg: DictConfig, seed: int, device, exp_dir: Path) -> list[dict]:
         masks_dir = base / "masks" / f"sp_{sp:.2f}"
         masks_dir.mkdir(parents=True, exist_ok=True)
 
-        # ── Save masks extracted at each stage (for mask_overlap analysis) ──
+        # Save masks extracted at each stage (for mask_overlap analysis)
         for stage, ckpt in [("init", init_path), ("mem", mem_path), ("grok", grok_path)]:
             stage_mask = _extract_mask(model, ckpt, sp, device)
             save_masks(stage_mask, masks_dir / f"mask_{stage}.pt")
-        # The grokked ticket (canonical) = mask ranked on W_grok.
+        # Rank the final ticket on W_grok.
         grok_mask = _extract_mask(model, grok_path, sp, device)
         save_masks(grok_mask, masks_dir / "grokked_mask.pt")
 
-        # ── Circuit survival: prune W_grok, evaluate WITHOUT retraining ─────
+        # Circuit survival: prune W_grok and evaluate without retraining
         ckpt = load_checkpoint_from_disk(grok_path)
         model.load_state_dict(ckpt["state_dict"]); model.to(device)
         apply_masks(model, grok_mask)
         surv_acc = _val_accuracy(model, val_loader, device)
         print(f"  [sp={sp:.0%}] circuit-survival val_acc (no retrain) = {surv_acc:.3f}")
 
-        # ── Grokked ticket: rewind to W_init / W_mem, retrain ───────────────
+        # Grokked ticket: rewind to W_init / W_mem, retrain
         for rewind_label, rewind_src in rewind_sources.items():
             seed_everything(seed + int(sp * 100), device)
             ckpt = load_checkpoint_from_disk(grok_path)
@@ -172,7 +155,7 @@ def main(cfg: DictConfig) -> None:
     for seed in seeds:
         rows.extend(run_seed(cfg, seed, device, exp_dir))
 
-    agg = write_aggregate_csv(exp_dir / "aggregate.csv", rows)
+    agg = write_run_aggregate_csv(exp_dir / "aggregate.csv", rows)
     print(f"\n  Aggregate → {agg}")
     print(f"  Plot offline with analysis/plot_exp_a.py and analysis/mask_overlap.py")
 

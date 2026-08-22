@@ -1,29 +1,10 @@
-"""
-src/model.py — Decoder-style Transformer for Grokking × LTH
-============================================================
+"""Decoder-style Transformer used by the experiments.
 
-Canonical setup (DEFAULT)
--------------------------
-    1-layer decoder-only transformer, d_model=128, 4 heads (d_head=32),
-    d_mlp=512, ReLU, NO LayerNorm, learned positional embeddings, untied
-    embed/unembed, logits read from the last ("=") token, head has no bias.
-    (Nanda 2023; Power 2022; Varma 2023.)
-
-Why a custom block?
--------------------
-    ``nn.TransformerEncoderLayer`` ALWAYS contains norm1/norm2, so a faithful
-    no-LayerNorm model is impossible with it. This module implements a minimal
-    block (multi-head self-attention + ReLU MLP) with a ``layernorm`` mode in
-    {"none", "pre", "post"} so the canonical no-LN path and the 2-layer Pre-LN
-    variant share one code path. Attention projections are explicit ``nn.Linear``
-    layers (q/k/v/out), which gives a clean, module-based pruning surface
-    (``nn.MultiheadAttention`` stores ``in_proj_weight`` as a bare parameter).
-
-Pruning surface
----------------
-    ``get_prunable_named_parameters`` selects exactly the ``nn.Linear`` weight
-    matrices via ``isinstance`` checks — excluding ``nn.Embedding`` and
-    ``nn.LayerNorm`` parameters and all 1-D params (biases, norm scales).
+The default has one full-attention block, a ReLU MLP, learned token and position
+embeddings, and no LayerNorm. Logits come from the last token through an untied
+linear head. Explicit linear attention projections allow pruning to select every
+``nn.Linear.weight`` while excluding embeddings, biases, and normalization
+parameters.
 """
 
 from __future__ import annotations
@@ -35,9 +16,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-# ---------------------------------------------------------------------------
 # Helpers
-# ---------------------------------------------------------------------------
 
 def _norm_mode(layernorm) -> str:
     """Normalise the config value into {"none", "pre", "post"}."""
@@ -51,9 +30,7 @@ def _norm_mode(layernorm) -> str:
     return mode
 
 
-# ---------------------------------------------------------------------------
 # Building blocks
-# ---------------------------------------------------------------------------
 
 class MultiHeadSelfAttention(nn.Module):
     """Full (bidirectional) multi-head self-attention with explicit q/k/v/out."""
@@ -101,7 +78,7 @@ class DecoderBlock(nn.Module):
     """
     Minimal transformer block with selectable LayerNorm placement.
 
-        none : x = x + attn(x);            x = x + mlp(x)            [canonical]
+        none : x = x + attn(x);            x = x + mlp(x)
         pre  : x = x + attn(norm1(x));     x = x + mlp(norm2(x))
         post : x = norm1(x + attn(x));     x = norm2(x + mlp(x))
     """
@@ -130,9 +107,7 @@ class DecoderBlock(nn.Module):
         return x
 
 
-# ---------------------------------------------------------------------------
 # Model
-# ---------------------------------------------------------------------------
 
 class GrokTransformer(nn.Module):
     """Decoder-style transformer for algorithmic sequence classification."""
@@ -170,7 +145,6 @@ class GrokTransformer(nn.Module):
 
         self._init_weights()
 
-    # ------------------------------------------------------------------
 
     def _init_weights(self) -> None:
         nn.init.normal_(self.token_emb.weight, std=0.02)
@@ -182,7 +156,6 @@ class GrokTransformer(nn.Module):
                 if module.bias is not None:
                     nn.init.zeros_(module.bias)
 
-    # ------------------------------------------------------------------
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """x: LongTensor (B, seq_len) → logits (B, n_classes), read at last token."""
@@ -193,7 +166,6 @@ class GrokTransformer(nn.Module):
             h = block(h)
         return self.head(h[:, -1, :])                         # (B, n_classes)
 
-    # ------------------------------------------------------------------
 
     def get_embedding_weights(self) -> torch.Tensor:
         """Token embedding matrix (vocab_size, d_model). Rows 0..p-1 = numbers."""
@@ -208,7 +180,7 @@ class GrokTransformer(nn.Module):
         weight matrices, selected by ``isinstance``.
 
         Excluded by construction: ``nn.Embedding`` and ``nn.LayerNorm`` params
-        (not nn.Linear) and all 1-D params (biases, norm scales — a Linear's
+        (not nn.Linear) and all 1-D params (biases and norm scales; a Linear's
         ``.bias`` is never added; only its 2-D ``.weight`` is).
         """
         prunable: dict[str, nn.Parameter] = {}
@@ -225,9 +197,7 @@ class GrokTransformer(nn.Module):
         )
 
 
-# ---------------------------------------------------------------------------
 # Factory
-# ---------------------------------------------------------------------------
 
 def get_model(
     vocab_size: int,
@@ -240,7 +210,7 @@ def get_model(
     seq_len: int = 4,
     layernorm: str = "none",
 ) -> GrokTransformer:
-    """Construct the GrokTransformer (canonical defaults: 1 layer, no LayerNorm)."""
+    """Construct a GrokTransformer with one layer and no LayerNorm by default."""
     return GrokTransformer(
         vocab_size=vocab_size,
         n_classes=n_classes,
@@ -254,9 +224,7 @@ def get_model(
     )
 
 
-# ---------------------------------------------------------------------------
 # Quick sanity check
-# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     p = 97
@@ -270,4 +238,4 @@ if __name__ == "__main__":
     print(f"Prunable params : {len(prunable)}")
     print(f"  names : {list(prunable.keys())}")
     n_ln = sum(1 for m in model.modules() if isinstance(m, nn.LayerNorm))
-    print(f"LayerNorm modules (canonical=0) : {n_ln}")
+    print(f"LayerNorm modules (default=0)   : {n_ln}")

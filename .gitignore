@@ -1,4 +1,4 @@
-# ── Python ──────────────────────────────────────────────────────────────────
+# Python
 __pycache__/
 *.py[cod]
 *.egg-info/
@@ -6,28 +6,29 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 
-# ── Virtual environments ──────────────────────────────────────────────────────
+# Virtual environments
 .venv/
 venv/
 env/
 
-# ── Hydra / experiment scratch ────────────────────────────────────────────────
+# Hydra / experiment scratch
 outputs/
 multirun/
 results_debug/
 wandb/
 
-# ── Heavy result artifacts (keep CSV / JSON summaries + figures) ───────────────
-# Checkpoints and masks are large and reproducible; do NOT commit them.
+# Heavy result artifacts (keep CSV / JSON summaries + figures)
+# Checkpoints and masks are large and reproducible, so they stay untracked.
 results/**/*.pt
 results/**/tb/
 # Keep: results/**/metrics.csv, summary.json, history.json, aggregate.csv,
 #       results/figures/**  (these are the reproducible, lightweight outputs)
 
-# ── OS / editor ───────────────────────────────────────────────────────────────
+# OS / editor
 .DS_Store
 Thumbs.db
 .idea/
 .vscode/
+.claude/
 
 log_exp_*.txt

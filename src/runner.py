@@ -1,12 +1,4 @@
-"""
-src/runner.py — Config → object helpers shared by the experiment scripts
-========================================================================
-
-Turns a composed Hydra config into the concrete objects an experiment needs
-(data loaders, model, optimizer, Trainer) so the experiment files stay thin
-orchestration. Also provides optional, opt-in Weights & Biases setup that never
-logs in or touches ``WANDB_API_KEY`` on the user's behalf.
-"""
+"""Build data, model, optimizer, logger, and trainer objects from Hydra config."""
 
 from __future__ import annotations
 
@@ -35,7 +27,6 @@ from src.model import get_model
 from src.train import EvalSchedule, Trainer, make_optimizer
 
 
-# ---------------------------------------------------------------------------
 
 def resolve_device(cfg: DictConfig) -> torch.device:
     if cfg.device == "auto":
@@ -118,7 +109,7 @@ def build_trainer(
     logging_backend: str | None = None,
     wandb_run=None,
 ) -> Trainer:
-    """Construct a Trainer wired to the canonical two-schedule measurement design."""
+    """Construct a Trainer with the configured evaluation schedules."""
     return Trainer(
         model=model,
         train_loader=train_loader,
@@ -142,9 +133,7 @@ def build_trainer(
     )
 
 
-# ---------------------------------------------------------------------------
 # Optional Weights & Biases (opt-in only)
-# ---------------------------------------------------------------------------
 
 def wandb_enabled(cfg: DictConfig) -> bool:
     return str(cfg.logging.backend).lower() == "wandb" and bool(cfg.wandb.get("enabled", False))
@@ -152,7 +141,7 @@ def wandb_enabled(cfg: DictConfig) -> bool:
 
 def maybe_init_wandb(cfg: DictConfig, run_name: str, group: str | None = None):
     """
-    Start a wandb run ONLY if logging.backend=='wandb' and wandb.enabled.
+    Start a wandb run when logging.backend=='wandb' and wandb.enabled.
     Returns the run (or None). Never logs in or reads WANDB_API_KEY itself.
     """
     if not wandb_enabled(cfg):
@@ -160,7 +149,7 @@ def maybe_init_wandb(cfg: DictConfig, run_name: str, group: str | None = None):
     try:
         import wandb
     except ImportError:
-        print("  [wandb] requested but not installed — continuing with CSV only.")
+        print("  [wandb] requested but not installed; continuing with CSV only.")
         return None
     return wandb.init(
         project=cfg.wandb.project,

@@ -1,28 +1,9 @@
-"""
-experiments/exp_c_wd_ablation.py
-================================
-Experiment C — ABLATION: weight-decay × sparsity grid.
+"""Experiment C: cross final-run weight decay with sparsity.
 
-Pruning method
---------------
-This experiment uses ONE-SHOT MAGNITUDE PRUNING (never IMP). For each grid cell
-it does a short pretraining pass to give weights a magnitude ranking, prunes
-once to the target sparsity, rewinds to W_0, applies the mask, then runs the
-grokking phase.
-
-Weight-decay confound control
-------------------------------
-Weight decay is the variable under study, so it must not leak into the pruning
-step. The short pretraining (which only produces the magnitude ranking) uses
-weight_decay = 0 for ALL cells. The grid's weight-decay value is applied ONLY in
-the grokking phase. This isolates the effect of weight decay during
-generalization from any effect it would have on which weights get pruned.
-
-Mapping
--------
-Tests whether weight decay and sparsity are substitutes or complements for
-closing the memorization→generalization gap. Plots are produced offline by
-analysis/plot_exp_c_heatmap.py from aggregate.csv (no TensorBoard/wandb needed).
+Each nonzero-sparsity cell trains densely for 800 updates with weight decay set
+to zero, ranks weights once by magnitude, and rewinds surviving weights to
+``W0``. The grid's weight decay is applied only during final training. The
+offline plotter reads the resulting aggregate CSV.
 """
 
 from __future__ import annotations
@@ -36,7 +17,7 @@ from omegaconf import DictConfig
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.logging_utils import load_summary, summary_to_aggregate_row, write_aggregate_csv
+from src.logging_utils import load_summary, summary_to_aggregate_row, write_run_aggregate_csv
 from src.metrics import compute_grokking_metrics
 from src.prune import compute_sparsity, make_empty_masks, one_shot_prune, rewind_weights
 from src.runner import (
@@ -64,8 +45,8 @@ def run_condition(
     init_ckpt = save_init_checkpoint(model, run_dir, cfg.checkpoint.init_filename)
     is_baseline = target_sparsity == 0.0
 
-    # ── One-shot magnitude pruning with the WD confound removed ─────────────
-    # Short pretrain uses weight_decay=0 for EVERY cell (ranking only).
+    # One-shot magnitude pruning with the WD confound removed
+    # Short pretraining uses weight_decay=0 in every cell.
     if not is_baseline:
         short_opt = build_optimizer(cfg, model, weight_decay=0.0)
         short_trainer = build_trainer(
@@ -82,7 +63,7 @@ def run_condition(
         rewind_weights(model, init_ckpt, masks)
     actual_sp = compute_sparsity(masks)
 
-    # ── Grokking phase: the grid weight_decay is applied ONLY here ──────────
+    # Grokking phase: apply the grid weight_decay here
     grok_dir = run_dir / "grok_phase"
     label = f"wd={weight_decay:.0e}_sp={target_sparsity:.0%}_seed={seed}"
     wandb_run = maybe_init_wandb(cfg, run_name=label, group="exp_c_wd_sparsity")
@@ -125,7 +106,7 @@ def main(cfg: DictConfig) -> None:
     exp_dir = Path(cfg.results_dir) / cfg.experiment.name
 
     print(f"\n{'#'*65}")
-    print(f"  Exp C — WD × Sparsity (one-shot magnitude pruning)")
+    print("  Exp C: weight decay x sparsity (one-shot magnitude pruning)")
     print(f"  {len(wd_values)}×{len(sp_values)} cells | seeds={seeds} | device={device}")
     print(f"{'#'*65}")
 
@@ -134,7 +115,7 @@ def main(cfg: DictConfig) -> None:
         for sp, wd in product(sp_values, wd_values):
             rows.append(run_condition(cfg, wd, sp, seed, device, exp_dir))
 
-    agg = write_aggregate_csv(exp_dir / "aggregate.csv", rows)
+    agg = write_run_aggregate_csv(exp_dir / "aggregate.csv", rows)
     print(f"\n  Aggregate → {agg}")
     print(f"  Plot offline with analysis/plot_exp_c_heatmap.py")
 

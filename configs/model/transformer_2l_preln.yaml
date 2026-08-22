@@ -1,9 +1,5 @@
-# configs/model/transformer_2l_preln.yaml
-# ========================================
-# NON-CANONICAL VARIANT (the project's original architecture).
-# 2-layer transformer with Pre-LayerNorm. Kept for comparison only; it is NOT
-# the canonical grokking setup (which is 1 layer with no LayerNorm). Select with
-#   model=transformer_2l_preln
+# Two-layer Pre-LayerNorm variant retained for comparison with the default
+# one-layer model. Select with model=transformer_2l_preln.
 name:      "transformer_2l_preln"
 n_layers:  2
 d_model:   128

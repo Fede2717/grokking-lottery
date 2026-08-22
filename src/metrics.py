@@ -1,32 +1,8 @@
-"""
-src/metrics.py — Advanced Metrics for Grokking × LTH Research
-==============================================================
+"""Metrics used by the training and analysis code.
 
-Implements all metrics categorised in the theoretical design document:
-
-CV-impact metrics
------------------
-    compute_hessian_top_eigenvalue   — sharpness via power iteration
-    compute_effective_rank           — intrinsic dimensionality of weight mats
-    compute_gsnr                     — gradient signal-to-noise ratio per layer
-
-LinkedIn / visual metrics
---------------------------
-    compute_weight_norms             — global & per-layer L1/L2 norms
-    compute_fourier_features         — DFT of embedding matrix at checkpoints
-    compute_sparsity_from_masks      — current sparsity ratio
-
-Scientific / rigorous metrics
-------------------------------
-    compute_grokking_metrics         — S_G, G_gap, weight norm at grokking
-    compute_generalization_gap       — train_acc - val_acc over time
-
-References
-----------
-    Nanda   et al. (2023) arXiv:2301.05217  [Fourier features]
-    Frankle et al. (2020) arXiv:1912.05671  [IMP stability]
-    Ghorbani et al. (2019) arXiv:1901.10159 [Hessian eigenvalues]
-    Liu     et al. (2023)                   [weight decay → grokking]
+The module provides weight norms, mask sparsity, embedding Fourier summaries,
+effective rank, gradient signal-to-noise ratio, grokking event summaries, and a
+top-Hessian-eigenvalue estimate based on autograd Hessian-vector products.
 """
 
 from __future__ import annotations
@@ -44,9 +20,7 @@ if TYPE_CHECKING:
     from src.model import GrokTransformer
 
 
-# ===========================================================================
 # Weight Norm Metrics
-# ===========================================================================
 
 def compute_weight_norms(
     model: nn.Module,
@@ -89,9 +63,7 @@ def compute_weight_norms(
     }
 
 
-# ===========================================================================
 # Sparsity
-# ===========================================================================
 
 def compute_sparsity_from_masks(
     masks: dict[str, torch.Tensor],
@@ -120,9 +92,7 @@ def compute_model_sparsity(model: nn.Module) -> float:
     return zeros / total if total > 0 else 0.0
 
 
-# ===========================================================================
-# Fourier Feature Analysis   (Light version — checkpoints only)
-# ===========================================================================
+# Fourier features
 
 def compute_fourier_features(
     embedding_weights: torch.Tensor,   # (vocab_size, d_model)
@@ -130,13 +100,11 @@ def compute_fourier_features(
     top_k: int = 5,
 ) -> dict:
     """
-    Analyse the Fourier structure of number-token embeddings.
+    Summarize the Fourier structure of number-token embeddings.
 
-    Grokking on modular arithmetic is mechanistically explained by the
-    model learning specific frequencies in the embedding space (Nanda 2023).
-    This function computes the DFT over the p number tokens and identifies
-    dominant frequencies — a direct readout of whether the network has
-    discovered the generalising algorithm.
+    The function computes a DFT over the first ``p`` embedding rows and reports
+    the mean power spectrum, dominant frequencies, top-frequency concentration,
+    and spectral entropy. These are descriptive embedding statistics.
 
     Algorithm
     ---------
@@ -154,12 +122,12 @@ def compute_fourier_features(
     Returns
     -------
     dict with:
-        "power_spectrum"   : list[float]   — mean power per frequency
-        "frequencies"      : list[int]     — frequency indices (0 .. p//2)
-        "top_frequencies"  : list[int]     — indices of top-k dominant freqs
-        "top_powers"       : list[float]   — power at top-k frequencies
-        "concentration"    : float         — power-in-top1 / total power
-        "entropy"          : float         — spectral entropy (lower = more structured)
+        "power_spectrum"   : mean power per frequency
+        "frequencies"      : frequency indices (0 .. p//2)
+        "top_frequencies"  : indices of top-k dominant frequencies
+        "top_powers"       : power at the top-k frequencies
+        "concentration"    : power at the top frequency divided by total power
+        "entropy"          : entropy of the normalized mean power spectrum
     """
     W = embedding_weights[:p, :].detach().cpu().float().numpy()  # (p, d_model)
 
@@ -191,9 +159,7 @@ def compute_fourier_features(
     }
 
 
-# ===========================================================================
 # Effective Rank
-# ===========================================================================
 
 def compute_effective_rank(weight_matrix: torch.Tensor) -> float:
     """
@@ -201,8 +167,8 @@ def compute_effective_rank(weight_matrix: torch.Tensor) -> float:
 
     Effective rank (Roy & Vetterli, 2007) = exp(H(σ)), where H is the
     Shannon entropy of the normalised singular values.  A low effective rank
-    signals that the weight matrix has collapsed to a low-dimensional
-    subspace — a proxy for implicit regularisation and structured learning.
+    indicates that the singular-value distribution is concentrated in fewer
+    dimensions.
 
     Parameters
     ----------
@@ -229,9 +195,7 @@ def compute_all_effective_ranks(model: nn.Module) -> dict[str, float]:
     return ranks
 
 
-# ===========================================================================
 # Gradient Signal-to-Noise Ratio (GSNR)
-# ===========================================================================
 
 def compute_gsnr(
     model: nn.Module,
@@ -290,9 +254,7 @@ def compute_gsnr(
     return gsnr
 
 
-# ===========================================================================
 # Hessian Top Eigenvalue  (power iteration)
-# ===========================================================================
 
 def compute_hessian_top_eigenvalue(
     model: nn.Module,
@@ -304,30 +266,21 @@ def compute_hessian_top_eigenvalue(
     n_batches: int = 4,
 ) -> float:
     """
-    Exact top Hessian eigenvalue via Hessian-vector products (HVP).
-
-    Measures loss-landscape *sharpness* (high λ_max ↔ sharp minima ↔ typically
-    worse generalisation; grokking is associated with flattening).
+    Estimate the largest Hessian eigenvalue using Hessian-vector products.
 
     Method
     ------
-    Uses a true HVP through **double backward** — no finite differences::
+    Uses autograd double backward rather than finite differences::
 
         g  = ∇_θ L                       (create_graph=True)
         Hv = ∇_θ (gᵀ v)                   (torch.autograd.grad of the inner product)
 
-    then power-iterates ``v ← Hv / ‖Hv‖`` and reports the Rayleigh quotient
+    It power-iterates ``v ← Hv / ‖Hv‖`` and reports the Rayleigh quotient
     ``vᵀ H v``.
 
-    Sparse-net correctness
-    ----------------------
-    The old finite-difference version perturbed ALL parameters, including
-    mask-zeroed weights, which corrupts the estimate for pruned networks. Here
-    the probe vector ``v`` is restricted to the ACTIVE (unmasked) subspace by
-    zeroing it on masked dimensions (``masks`` optional); ``Hv`` is re-zeroed the
-    same way, so the iteration stays in the active subspace.
-
-    EXPENSIVE / FRAGILE metric — kept OFF by default (config ``compute_hessian``).
+    When masks are provided, the probe vector and each HVP are zeroed in pruned
+    dimensions, so power iteration remains in the active subspace. The metric is
+    disabled by default because it is computationally expensive.
 
     Parameters
     ----------
@@ -397,9 +350,7 @@ def compute_hessian_top_eigenvalue(
     return abs(eigenvalue)
 
 
-# ===========================================================================
 # Grokking-specific metrics
-# ===========================================================================
 
 def compute_grokking_metrics(history_dict: dict) -> dict:
     """

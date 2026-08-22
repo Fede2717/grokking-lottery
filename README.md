@@ -1,233 +1,201 @@
-# Grokking × Lottery Ticket Hypothesis
+# Grokking and sparse subnetworks
 
-A **partial reproduction** of Minegishi, Iwasawa & Matsuo, *"Bridging Lottery Ticket and Grokking"*
-(TMLR 2025, [arXiv:2310.19470](https://arxiv.org/abs/2310.19470)), plus original ablations,
-built as clean, extensible research infrastructure.
+I started this project to study whether the sparse structure selected by a
+trained network can reproduce grokking after its surviving weights are rewound
+to initialization. The experiments use modular addition with a small
+Transformer and compare magnitude-pruned subnetworks across several sparsity
+levels.
 
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org)
-[![PyTorch 2.1+](https://img.shields.io/badge/pytorch-2.1+-orange.svg)](https://pytorch.org)
-[![Hydra](https://img.shields.io/badge/config-Hydra-89b4fa.svg)](https://hydra.cc)
+The current results come from Experiment B. Experiments A and C are implemented
+as exploratory drivers, but there are no result sets for them under the current
+implementation.
 
----
+## Background
 
-## The question
+Grokking is a delayed transition from fitting the training set to generalizing
+on held-out examples. On modular arithmetic, a network may memorize the training
+pairs well before it learns a rule that works across the full operation table.
 
-**Grokking** (Power et al., 2022): a network trained far past memorization on a small
-algorithmic task suddenly generalizes — a delayed phase transition.
-**The Lottery Ticket Hypothesis** (Frankle & Carlin, 2019): a dense network contains a
-sparse subnetwork that trains well from (near-)initialization.
+The Lottery Ticket Hypothesis asks whether a dense network contains a sparse
+subnetwork that can train successfully when its surviving weights are restored
+to an early checkpoint. This project uses the initial parameter state, `W0`, as
+the rewind point.
 
-Minegishi et al. (2025) connect the two. The measured claim we reproduce, stated carefully:
+The closest prior work is Minegishi, Iwasawa, and Matsuo (2025), *Bridging
+Lottery Ticket and Grokking: Understanding Grokking from Inner Structure of
+Networks*. It studies the relationship between sparse network structure and
+grokking directly. The pruning procedures used here have their own details,
+especially the optimizer state retained during iterative mask discovery.
 
-> A sparse subnetwork found by magnitude pruning **eliminates the
-> memorization→generalization delay** — the gap shrinks toward **zero** — rather than
-> the dense network "grokking faster". The surviving structure (the mask) and its
-> overlap across training stages track the generalization improvement.
+## Experimental setup
 
-We use the **correct terminology** throughout: pruned/sparse subnetworks **eliminate the
-delay (gap → 0)**; we never claim "grok faster", "4–15×", or "100% grokking at 95%".
-Earlier numbers like `S_G = 300` and `gap = 0` for every sparse condition were
-**measurement-floor artifacts** (see below), not findings.
-
----
-
-## Canonical setup (the default)
-
-The default configuration is the canonical grokking-transformer setup
-(Nanda 2023; Varma 2023; Power 2022):
-
-| Component | Default |
+| Item | Value |
 |---|---|
-| Architecture | **1-layer** decoder-only transformer, **no LayerNorm** |
-| Width | `d_model=128`, `4 heads` (`d_head=32`), `d_mlp=512`, ReLU |
-| Embeddings | learned positional; **untied** embed/unembed; logits read at the `=` token; head has no bias |
-| Optimizer | AdamW, `lr=1e-3`, `weight_decay=1.0`, `betas=(0.9, 0.98)`, `eps=1e-8`, **no gradient clipping** |
-| Batching | **full-batch** gradient descent |
-| Task | `(a + b) mod 97`, 50% train split (Power; Nanda's mainline uses 0.3) |
-| Thresholds | train (memorization) and val (generalization) both `P = 0.95` |
+| Task | Modular addition, `p = 97` |
+| Examples | All `97^2 = 9,409` ordered pairs |
+| Input | `[a, +, b, =]`, vocabulary size `99` |
+| Split | `4,704` train and `4,705` validation examples |
+| Model | One-block non-causal Transformer, no LayerNorm |
+| Width | `d_model = 128`, four attention heads |
+| MLP | `d_ff = 512`, ReLU |
+| Dropout | `0.0` |
+| Position encoding | Learned, four positions |
+| Output | Final-position state through an untied linear head |
+| Parameters | `223,360` total, `209,024` prunable |
+| Optimizer | AdamW, learning rate `1e-3`, weight decay `1.0` |
+| AdamW settings | `betas = (0.9, 0.98)`, `eps = 1e-8` |
+| Batch size | Full training split |
+| Final-run budget | `40,000` updates |
 
-A **declared non-canonical variant** is kept for comparison: a 2-layer **Pre-LayerNorm**
-model (`model=transformer_2l_preln`) and a mini-batch regime (`training=minibatch`).
+Each experiment seed controls Python, NumPy, PyTorch, CUDA, model
+initialization, and the dataset split. The split therefore changes across
+seeds.
 
----
+Every `nn.Linear.weight` tensor is prunable, including the attention
+projections, MLP matrices, and output head. Embeddings, biases, and normalization
+parameters are excluded. Masks are reapplied after every optimizer update, so
+pruned weights cannot regrow.
 
-## The measurement fix (read this first)
+Training and validation are evaluated at labeled step `0`, every five steps
+through step `1000`, and every 25 steps afterward. Step `0` is the first
+post-update evaluation. Memorization and grokking are the first evaluations in
+runs of two consecutive train or validation accuracies at or above `0.95`. The
+earliest reported event is step `0`, confirmed at step `5`.
 
-The original detector only evaluated on multiples of `log_every` and required
-`grok_window` consecutive passing evals, so the **earliest detectable step was
-`log_every × grok_window = 300`**. Every fast (sparse) condition was pinned to 300 with
-`gap = 0` — an artifact, not a result.
+The default config disables early stopping. The Experiment B run configs enable
+it for sparse conditions with `patience = 500`; the confirming evaluation counts
+toward that patience. Dense baselines run for the full budget.
 
-The fix (in [src/train.py](src/train.py)):
-- **Two independent schedules.** Cheap eval (train/val acc + loss) runs on a *fine-early*
-  schedule — every 5 steps for the first 1000 steps, then every 25
-  ([`EvalSchedule`](src/train.py)). Expensive metrics (Fourier, Hessian, weight norms)
-  run on `metrics_every` (default 1000).
-- **Post-hoc detection.** `memorization_step` / `grokking_step` / `grokking_gap` are
-  computed from the logged accuracy curves as the *first genuine threshold crossing*
-  satisfying the window — decoupled from the log period
-  ([`detect_threshold_crossing`](src/train.py)).
-- The eval resolution is recorded in each run's `summary.json`, so the timing
-  uncertainty is explicit.
+## Experiment B protocols
 
----
+The grid contains sparsities `0%, 20%, 50%, 70%, 80%, 90%, 95%` and seeds
+`0, 1, 2, 3, 4` for each method.
 
-## Repository layout
+### Post-grok one-shot
 
-```
-grokking-lottery/
-├── configs/            Hydra config tree (canonical defaults + labeled variants)
-│   ├── config.yaml             root: composes canonical model+training; logging.backend
-│   ├── dataset/                modular_add (default), modular_mul (seam)
-│   ├── model/                  transformer_1l (default), transformer_2l_preln (variant)
-│   ├── training/               default (full-batch), minibatch (variant)
-│   ├── pruning/                imp
-│   └── experiment/             exp_a, exp_b, exp_c
-├── src/
-│   ├── data.py         Modular-arithmetic dataset; full-batch loader; task seam
-│   ├── model.py        Custom no-LayerNorm decoder block; isinstance-based pruning surface
-│   ├── train.py        Trainer (two-schedule measurement), post-hoc detection, optimizer factory
-│   ├── prune.py        Global magnitude pruning, IMP, one-shot, disk-based rewind
-│   ├── metrics.py      Fourier, weight norms, effective rank, GSNR, exact-HVP Hessian
-│   ├── logging_utils.py  MetricLogger (CSV always-on; TensorBoard default; wandb opt-in)
-│   └── runner.py       Config → object helpers shared by experiments
-├── experiments/        exp_a / exp_b / exp_c — orchestration only (no plotting)
-├── analysis/           Offline plots + mask-overlap, read CSV/JSON only
-├── scripts/            run_parallel_seeds.py (multi-seed launcher)
-├── tests/              pytest suite
-└── results/            per-run metrics.csv / summary.json + per-exp aggregate.csv + figures/
-```
+For each nonzero sparsity, the code:
 
----
+1. Initializes a dense model and saves `W0`.
+2. Trains for `1,200` full-batch AdamW updates.
+3. Ranks all prunable weights globally by absolute magnitude and constructs one
+   mask at the target sparsity.
+4. Restores surviving weights from `W0`.
+5. Trains the sparse model with a fresh AdamW optimizer.
 
-## Outputs (reproducible from CSV alone)
+All five dense warm-ups grokked before update `1,200`. These masks characterize
+weights after grokking; the experiment does not cover mask discovery before
+grokking or at initialization. The same seed-specific warm-up is repeated
+across the six nonzero sparsity cells.
 
-Every run writes, regardless of viewer backend:
+### Stateful IMP
 
-- `results/<exp>/<run>/metrics.csv` — **long format** `step,tag,value` (tags identical to
-  the TensorBoard tags, so offline plots match TensorBoard exactly).
-- `results/<exp>/<run>/summary.json` — config, sparsity, memorization/grokking/gap,
-  final accuracies, `grokked`, eval resolution, checkpoint paths.
-- `results/<exp>/aggregate.csv` — one row per (condition, seed) for headline plots.
+The iterative procedure trains for 400 updates per round, prunes `20%` of the
+currently active weights globally, and restores surviving weights from `W0`.
+Model weights are rewound after each round, while the AdamW optimizer and its
+moments are retained. Final sparse training starts from `W0` with a fresh
+optimizer.
 
-The **live viewer** is selected by `logging.backend` ∈ `{tensorboard (default), csv, none,
-wandb}`. CSV + JSON are always produced — **no external account is required**. View
-TensorBoard with `tensorboard --logdir results/`.
+| Target sparsity | Rounds | Discovery updates |
+|---:|---:|---:|
+| 20% | 1 | 400 |
+| 50% | 4 | 1,600 |
+| 70% | 6 | 2,400 |
+| 80% | 8 | 3,200 |
+| 90% | 11 | 4,400 |
+| 95% | 14 | 5,600 |
 
----
+This differs from the usual lottery-ticket rewind because optimizer state is
+not reset during mask discovery. The saved results contain only the final IMP
+round for each cell, so earlier-round memorization and generalization cannot be
+reconstructed.
 
-## Install & run (local)
+## Results
 
-```bash
-python -m venv .venv && source .venv/Scripts/activate   # Windows; use bin/activate on Linux/macOS
-pip install -e ".[dev]"                                 # CPU torch by default
-```
+A run is successful when validation accuracy reaches `0.95` within the final
+training budget. Medians use successful seeds only. `DNF` means that no seed in
+the condition reached the threshold.
 
-**Fast debug run** (CPU, ~seconds; confirms the pipeline end-to-end):
+| Method | Sparsity | Successful seeds | Median grokking step |
+|---|---:|---:|---:|
+| Stateful IMP | 0% | 5/5 | 935.0 |
+| Stateful IMP | 20% | 5/5 | 835.0 |
+| Stateful IMP | 50% | 5/5 | 29,275.0 |
+| Stateful IMP | 70% | 3/5 | 34,625.0 |
+| Stateful IMP | 80% | 4/5 | 572.5 |
+| Stateful IMP | 90% | 1/5 | 34,925.0 |
+| Stateful IMP | 95% | 0/5 | DNF |
+| Post-grok one-shot | 0% | 5/5 | 935.0 |
+| Post-grok one-shot | 20% | 5/5 | 380.0 |
+| Post-grok one-shot | 50% | 4/5 | 1,107.5 |
+| Post-grok one-shot | 70% | 4/5 | 687.5 |
+| Post-grok one-shot | 80% | 4/5 | 672.5 |
+| Post-grok one-shot | 90% | 3/5 | 560.0 |
+| Post-grok one-shot | 95% | 1/5 | 1,975.0 |
 
-```bash
-python -m experiments.exp_b_lth_then_grok \
-  dataset.p=11 training.n_grok_steps=600 training.metrics_every=150 \
-  "pruning.target_sparsities=[0.0,0.5]" pruning.imp_steps_per_round=40 \
-  num_seeds=1 logging.backend=none results_dir=results_debug
-```
+Post-grok one-shot has more successful seeds at 70%, 90%, and 95% sparsity.
+Stateful IMP has one more success at 50%, and the methods tie at 0%, 20%, and
+80%. Among successful runs, the one-shot medians from 20% through 90% are often
+earlier than the dense median. These medians are conditioned on success, which
+matters when several seeds fail.
 
-**Canonical run** (GPU recommended):
+The results support a limited conclusion: masks selected from trained dense
+models can help some rewound subnetworks reach high validation accuracy. They do
+not show that sparse models generally grok faster, that the two pruning methods
+are equivalent, or that 95% sparsity is reliable.
 
-```bash
-python -m experiments.exp_b_lth_then_grok                 # canonical defaults
-python -m experiments.exp_a_grok_then_prune experiment=exp_a
-python -m experiments.exp_c_wd_ablation     experiment=exp_c
-```
-
-**Common overrides:**
-
-```bash
-python -m experiments.exp_b_lth_then_grok training.weight_decay=1e-2
-python -m experiments.exp_b_lth_then_grok model=transformer_2l_preln   # non-canonical variant
-python -m experiments.exp_b_lth_then_grok dataset=modular_mul          # task seam
-python -m experiments.exp_b_lth_then_grok compute_hessian=true         # expensive/fragile, off by default
-```
-
-**Plots (offline, from CSV/JSON only):**
-
-```bash
-python analysis/plot_exp_b.py        --exp-dir results/exp_b
-python analysis/plot_exp_a.py        --exp-dir results/exp_a
-python analysis/plot_exp_c_heatmap.py --exp-dir results/exp_c
-python analysis/mask_overlap.py      --exp-dir results/exp_a
-```
-
-## Run on Kaggle (no keys needed)
-
-```python
-!git clone https://github.com/YOUR_USERNAME/grokking-lottery.git
-%cd grokking-lottery
-!pip install -e ".[dev]" -q
-# Multi-seed across the 2× T4s; defaults to TensorBoard + CSV, no login:
-!python scripts/run_parallel_seeds.py --experiment exp_b --num-seeds 5 --num-gpus 2
-```
-
-Optional Weights & Biases (opt-in only): `pip install -e ".[wandb]"`, `wandb login`, then
-add `logging.backend=wandb wandb.enabled=true wandb.entity=<you>`. The launcher never
-injects `WANDB_API_KEY` or assumes a login.
-
----
-
-## Experiments
-
-- **Exp A — control (canonical direction):** train dense to full grokking, then prune the
-  grokked weights to extract the **"grokked ticket"**, rewind (to `W_0` vs `W_mem`), and
-  retrain. Also measures **circuit survival** (val accuracy of the pruned post-grokking
-  net with no retraining). Maps to a subnetwork extracted *after* generalization.
-- **Exp B — extension:** find a sparse ticket *before* grokking via **IMP** (with one-shot
-  magnitude pruning as an ablation), rewind to `W_0`, then run the full grokking phase.
-  Tests whether the sparse subnetwork eliminates the delay.
-- **Exp C — ablation:** weight-decay × sparsity grid using **one-shot magnitude pruning**
-  (not IMP). The short pre-pruning pass uses `weight_decay=0` for **all** cells (removing
-  the weight-decay confound); the grid value is applied **only** in the grokking phase.
-
-**Reproduction-fidelity analysis:** [analysis/mask_overlap.py](analysis/mask_overlap.py)
-computes Jaccard/IoU between masks extracted at the init / memorization / grokking stages
-and reports the gap-vs-sparsity relationship — reproducing Minegishi's measured claims
-(structure matters; the sparse subnetwork eliminates the delay; mask change tracks the
-generalization improvement).
-
----
-
-## What we reproduce / what differs
-
-**Reproduce (qualitatively, on a single task family):**
-- The LTH↔grokking link: a sparse magnitude-pruned subnetwork eliminates the
-  memorization→generalization delay rather than the dense net grokking faster.
-- The mask-overlap framing (subnetwork structure stabilizes from memorization to
-  generalization).
-
-**Differs from Minegishi et al.:**
-- Single task family (modular arithmetic) and a small model; we do not sweep the paper's
-  full architecture/task matrix.
-- Default uses 50% train split (Power) rather than 0.3; this is configurable.
-- Quantitative thresholds, schedules and seed counts are our own; we report
-  measured numbers with explicit eval resolution, not the paper's exact values.
+Seed-level tables and figures are in [`res/derived/`](res/derived/). The raw
+result bundles are in [`res/raw/`](res/raw/), with checksums and provenance notes
+in [`res/exp_b_provenance.json`](res/exp_b_provenance.json).
 
 ## Limitations
 
-- Single task family (modular `add`/`mul` mod 97) and one small architecture — findings
-  should not be over-generalized.
-- Grokking step counts depend on seed, split and schedule; treat them as estimates with
-  the recorded eval resolution as uncertainty.
-- The Hessian sharpness metric (exact HVP) is **off by default** — expensive and
-  numerically fragile.
+- Experiment B has no random-pruning control or pruning-at-initialization
+  baseline such as SNIP, GraSP, SynFlow, or edge-popup.
+- The one-shot masks are measured after grokking, so they do not answer the
+  original pre-grokking pruning question.
+- IMP retains optimizer state across weight rewinds, and intermediate rounds
+  are absent from the saved results.
+- Model initialization and dataset split variation share the same seed.
+- The auxiliary mechanistic metrics in the code are not present in the
+  Experiment B results, so these runs do not support conclusions from them.
+- Experiment C fixes discovery weight decay at zero and applies the grid value
+  only during final training, but no Experiment C results are included.
 
----
+## Reproduction
+
+Install the package and development dependencies:
+
+```bash
+pip install -e ".[dev]"
+pytest -q
+```
+
+Reconstruct the Experiment B tables and figures from the raw bundles:
+
+```bash
+python analysis/summarize_exp_b.py --figures
+```
+
+Run one seed of each experiment:
+
+```bash
+python experiments/exp_a_grok_then_prune.py experiment=exp_a seed=0 num_seeds=1
+python experiments/exp_b_lth_then_grok.py experiment=exp_b seed=0 num_seeds=1
+python experiments/exp_c_wd_ablation.py experiment=exp_c seed=0 num_seeds=1
+```
+
+Run five Experiment B seeds across two GPUs:
+
+```bash
+python scripts/run_parallel_seeds.py --experiment exp_b --num-seeds 5 --base-seed 0 --num-gpus 2
+```
 
 ## References
 
-```
-Minegishi, Iwasawa, Matsuo (2025). Bridging Lottery Ticket and Grokking. TMLR. arXiv:2310.19470.
-Frankle & Carlin (2019). The Lottery Ticket Hypothesis. ICLR.
-Power et al. (2022). Grokking: Generalization Beyond Overfitting on Small Algorithmic Datasets. arXiv:2201.02177.
-Nanda et al. (2023). Progress Measures for Grokking via Mechanistic Interpretability. ICLR.
-Varma et al. (2023). Explaining Grokking Through Circuit Efficiency. arXiv:2309.02390.
-Liu et al. (2022). Towards Understanding Grokking. NeurIPS.
-```
+- Power et al. (2022), *Grokking: Generalization Beyond Overfitting on Small
+  Algorithmic Datasets*.
+- Frankle and Carbin (2019), *The Lottery Ticket Hypothesis: Finding Sparse,
+  Trainable Neural Networks*.
+- Gouki Minegishi, Yusuke Iwasawa, and Yutaka Matsuo (2025), *Bridging Lottery
+  Ticket and Grokking: Understanding Grokking from Inner Structure of Networks*,
+  Transactions on Machine Learning Research.

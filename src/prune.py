@@ -1,29 +1,8 @@
-"""
-src/prune.py — Pruning Engine v2 (Disk-Based Weight Rewinding)
-==============================================================
+"""Magnitude pruning, binary masks, and disk-based weight rewinding.
 
-Key change from v1
-------------------
-    rewind_weights() now loads from a DISK path (produced by
-    save_init_checkpoint in train.py) rather than from an in-memory dict.
-
-    Rationale: IMP involves multiple Python processes (parallel seeds),
-    Kaggle kernel restarts, and long training loops.  An in-memory dict
-    can silently diverge — a disk file is the single source of truth.
-
-    Every call to rewind_weights() performs:
-        1. Load state_dict from path.
-        2. Copy into model parameters (strict=True by default).
-        3. Apply the current binary mask (zero out pruned weights).
-
-API changes
------------
-    rewind_weights(model, init_ckpt_path: str|Path, masks)
-        — was rewind_weights(model, initial_state: dict, masks)
-    run_imp(... init_ckpt_path: str|Path ...)
-        — was run_imp(... initial_state: dict ...)
-    one_shot_prune(... init_ckpt_path: str|Path ...)
-        — was one_shot_prune(... initial_state: dict ...)
+Rewind operations load a saved state dictionary, copy it into the model, and
+apply the current mask. ``run_imp`` retains trainer and optimizer state across
+rounds while rewinding model weights.
 """
 
 from __future__ import annotations
@@ -41,9 +20,7 @@ from src.train import (
 )
 
 
-# ===========================================================================
 # Mask utilities
-# ===========================================================================
 
 def make_empty_masks(model: nn.Module) -> dict[str, torch.Tensor]:
     """Return all-ones mask dict for every prunable parameter."""
@@ -87,16 +64,15 @@ def rewind_weights(
     strict         : Passed to model.load_state_dict(). Default True.
 
     This is the critical step that distinguishes LTH from fine-tuning:
-    we restore the architecture (mask) but not the learned weights.
+    This restores the architecture encoded by the mask without retaining the
+    learned weights.
     """
     ckpt = load_checkpoint_from_disk(init_ckpt_path)
     model.load_state_dict(ckpt["state_dict"], strict=strict)
     apply_masks(model, masks)
 
 
-# ===========================================================================
 # Global Magnitude Pruning
-# ===========================================================================
 
 def _global_threshold(
     model:           nn.Module,
@@ -139,7 +115,7 @@ def apply_global_magnitude_pruning(
 ) -> dict[str, torch.Tensor]:
     """
     Update masks so that global sparsity == target_sparsity.
-    Masks are monotone — never re-activated.
+    Masks are monotone: pruned entries are not reactivated.
     """
     threshold = _global_threshold(model, masks, target_sparsity)
     prunable  = model.get_prunable_named_parameters()
@@ -155,9 +131,7 @@ def apply_global_magnitude_pruning(
     return masks
 
 
-# ===========================================================================
 # One-shot Pruning  (ablation baseline)
-# ===========================================================================
 
 def one_shot_prune(
     model:           nn.Module,
@@ -187,9 +161,7 @@ def one_shot_prune(
     return masks
 
 
-# ===========================================================================
 # Iterative Magnitude Pruning (IMP)
-# ===========================================================================
 
 @dataclass
 class IMPResult:
@@ -209,10 +181,10 @@ def run_imp(
     steps_per_round:      int   = 2_000,
 ) -> IMPResult:
     """
-    Iterative Magnitude Pruning with disk-based weight rewinding.
+    Stateful-optimizer iterative magnitude pruning with weight rewinding.
 
-    Algorithm (Frankle & Carlin, 2019)
-    ------------------------------------
+    Algorithm
+    ---------
     k_rounds = ceil(log(1-s*) / log(1-p))  where s*=target, p=prune_rate
 
     For round k in 1..k_rounds:
@@ -220,12 +192,15 @@ def run_imp(
         2. Prune bottom p% of remaining active weights globally.
         3. Rewind: load init_ckpt_path, apply cumulative mask.
 
+    The Trainer and its optimizer are reused across rounds. Model parameters are
+    rewound, but optimizer moments and step counters are not reset or rewound.
+
     Parameters
     ----------
     model                : Model (modified in-place).
     init_ckpt_path       : Path to init_weights.pt (from save_init_checkpoint).
-                           MUST exist before this function is called.
-    trainer              : Trainer instance — its .train() method is called.
+                           It must exist before this function is called.
+    trainer              : Trainer instance whose .train() method is called.
     target_sparsity      : Final global sparsity target in [0, 1).
     prune_rate_per_round : Fraction of currently-active weights pruned per round.
     steps_per_round      : Gradient steps for short training between rounds.
@@ -274,6 +249,17 @@ def run_imp(
         history = trainer.train(
             n_steps=steps_per_round, masks=masks,
             save_checkpoints=False, verbose=False,
+            config_summary={
+                "stage": "imp_discovery",
+                "target_sparsity": float(target_sparsity),
+                "round": rnd + 1,
+                "n_rounds": k_rounds,
+                "round_input_sparsity": float(current_sp),
+                "round_prune_target": float(round_target),
+                "updates_per_round": int(steps_per_round),
+                "weight_rewind": "W0",
+                "optimizer_state_reset_between_rounds": False,
+            },
         )
         val_acc = history.val_acc[-1] if history.val_acc else 0.0
         result.round_val_accs.append(val_acc)

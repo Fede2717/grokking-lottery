@@ -1,27 +1,13 @@
-"""
-experiments/exp_b_lth_then_grok.py
-==================================
-Experiment B — EXTENSION: find a sparse ticket BEFORE grokking, then train it.
+"""Experiment B: discover a mask, rewind to initialization, and train.
 
-What it does
-------------
-For each (sparsity s, method ∈ {imp, one_shot}, seed):
-    1. Build a fresh model; save W_0 to disk (strict init checkpoint).
-    2. Discover a mask at sparsity s:
-         imp      — Iterative Magnitude Pruning (Frankle & Carlin 2019): prune
-                    a fraction per round, rewind to W_0, repeat (SHORT training
-                    per round, not full grokking).
-         one_shot — one-shot magnitude pruning (ablation).
-    3. Rewind to W_0 and apply the mask.
-    4. Long grokking phase; the grokked mask is saved when generalization fires.
+The ``imp`` method trains for 400 updates per round, prunes active weights, and
+rewinds weights while retaining AdamW state. The ``one_shot`` method trains a
+dense model for 1,200 updates and ranks magnitudes once. Final sparse training
+starts from ``W0`` with a fresh optimizer.
 
-Mapping to Minegishi et al. (TMLR 2025)
----------------------------------------
-This is the LTH-then-grok direction: it tests whether a sparse subnetwork
-ELIMINATES the memorization→generalization delay (gap → 0) rather than merely
-shrinking it. Reported timing comes from POST-HOC detection on the logged curves
-(no measurement floor). Plots are produced offline by analysis/ from the CSV /
-summary.json / aggregate.csv — this script writes data only.
+In the retained results, every one-shot warm-up had already grokked. The IMP
+round histories overwrite one another, so only the last round is preserved.
+Use ``analysis/summarize_exp_b.py`` to reconstruct the archived grid.
 """
 
 from __future__ import annotations
@@ -34,7 +20,7 @@ from omegaconf import DictConfig
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.logging_utils import load_summary, summary_to_aggregate_row, write_aggregate_csv
+from src.logging_utils import load_summary, summary_to_aggregate_row, write_run_aggregate_csv
 from src.metrics import compute_grokking_metrics
 from src.prune import compute_sparsity, make_empty_masks, one_shot_prune, rewind_weights, run_imp
 from src.runner import (
@@ -67,9 +53,10 @@ def run_single(
     label = f"sp={target_sparsity:.0%}_{method}_seed={seed}"
     print(f"\n{'='*65}\n  {label}\n{'='*65}")
 
-    # ── Pruning phase ──────────────────────────────────────────────────────
+    # Pruning phase
     if is_baseline:
         masks = make_empty_masks(model)
+        discovery_config = {"kind": "none", "updates": 0}
     elif method == "imp":
         imp_opt = build_optimizer(cfg, model)
         imp_trainer = build_trainer(
@@ -83,17 +70,39 @@ def run_single(
             steps_per_round=cfg.pruning.imp_steps_per_round,
         )
         masks = imp_result.final_masks
+        discovery_config = {
+            "kind": "stateful_optimizer_imp",
+            "rounds": len(imp_result.round_sparsities),
+            "updates_per_round": int(cfg.pruning.imp_steps_per_round),
+            "total_updates": len(imp_result.round_sparsities) * int(cfg.pruning.imp_steps_per_round),
+            "prune_rate_per_round": float(cfg.pruning.prune_rate_per_round),
+            "weight_rewind": "W0",
+            "optimizer_state_reset_between_rounds": False,
+        }
     elif method == "one_shot":
         short_opt = build_optimizer(cfg, model)
         short_trainer = build_trainer(
             cfg, model, train_loader, val_loader, short_opt, device,
             run_dir / "oneshot_pretrain", compute_fourier=False, logging_backend="none",
         )
+        warmup_steps = int(cfg.pruning.imp_steps_per_round) * 3
         short_trainer.train(
-            n_steps=cfg.pruning.imp_steps_per_round * 3,
+            n_steps=warmup_steps,
             save_checkpoints=False, verbose=False,
+            config_summary={
+                "experiment": "exp_b", "stage": "one_shot_warmup",
+                "method": method, "target_sparsity": target_sparsity,
+                "seed": seed, "warmup_steps": warmup_steps,
+                "weight_decay": float(cfg.training.weight_decay),
+            },
         )
         masks = one_shot_prune(model, init_ckpt, target_sparsity)
+        discovery_config = {
+            "kind": "dense_warmup_one_shot_magnitude",
+            "updates": warmup_steps,
+            "weight_decay": float(cfg.training.weight_decay),
+            "weight_rewind": "W0",
+        }
     else:
         raise ValueError(f"Unknown method: {method!r}")
 
@@ -101,7 +110,7 @@ def run_single(
     actual_sp = compute_sparsity(masks)
     print(f"  actual sparsity = {actual_sp:.2%}")
 
-    # ── Grokking phase ─────────────────────────────────────────────────────
+    # Grokking phase
     grok_dir = run_dir / "grok_phase"
     wandb_run = maybe_init_wandb(cfg, run_name=label, group=f"exp_b_{method}")
     grok_opt = build_optimizer(cfg, model)
@@ -121,6 +130,27 @@ def run_single(
             "seed": seed,
             "weight_decay": float(cfg.training.weight_decay),
             "n_grok_steps": int(cfg.training.n_grok_steps),
+            "optimizer": {
+                "name": str(cfg.training.optimizer), "lr": float(cfg.training.lr),
+                "betas": [float(cfg.training.beta1), float(cfg.training.beta2)],
+                "eps": float(cfg.training.eps), "state_fresh_for_final_phase": True,
+            },
+            "measurement": {
+                "grok_threshold": float(cfg.training.grok_threshold),
+                "mem_threshold": float(cfg.training.mem_threshold),
+                "window": int(cfg.training.grok_window),
+                "eval_schedule": {
+                    "fine_until": int(cfg.training.eval_every.fine_until),
+                    "fine_interval": int(cfg.training.eval_every.fine_interval),
+                    "coarse_interval": int(cfg.training.eval_every.coarse_interval),
+                },
+            },
+            "early_stop": {
+                "enabled": bool(cfg.training.early_stop.enabled),
+                "patience_evaluations": int(cfg.training.early_stop.patience),
+                "dense_baseline_exempt": True,
+            },
+            "discovery": discovery_config,
         },
     )
     finish_wandb(wandb_run)
@@ -142,7 +172,7 @@ def main(cfg: DictConfig) -> None:
     exp_dir = Path(cfg.results_dir) / cfg.experiment.name
 
     print(f"\n{'#'*65}")
-    print(f"  Exp B — LTH → Grok | device={device} seeds={seeds}")
+    print(f"  Exp B - mask discovery, rewind, final training | device={device} seeds={seeds}")
     print(f"  sparsities={sparsities} wd={cfg.training.weight_decay} steps={cfg.training.n_grok_steps:,}")
     print(f"{'#'*65}")
 
@@ -153,7 +183,7 @@ def main(cfg: DictConfig) -> None:
             if cfg.experiment.run_one_shot_ablation:
                 rows.append(run_single(cfg, sp, "one_shot", seed, device, exp_dir))
 
-    agg = write_aggregate_csv(exp_dir / "aggregate.csv", rows)
+    agg = write_run_aggregate_csv(exp_dir / "aggregate.csv", rows)
     print(f"\n  Aggregate → {agg}")
     print(f"  Per-run summaries/CSV under {exp_dir}/  (plot offline with analysis/plot_exp_b.py)")
 

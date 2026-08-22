@@ -1,8 +1,5 @@
-# configs/experiment/exp_a.yaml
-# ==============================
-# Experiment A — CONTROL: grok first, then prune + rewind (the faithful
-# "grokked ticket" path). Maps to Minegishi et al. (TMLR 2025): a subnetwork
-# extracted AFTER full generalization, rewound and retrained.
+# Experiment A: grok first, then extract a post-generalization magnitude mask,
+# compare immediate pruning survival, and retrain after two rewind choices.
 name:        "exp_a"
 description: "Grok dense, extract grokked ticket, rewind (W_0 vs W_mem) and retrain"
 

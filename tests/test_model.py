@@ -1,4 +1,4 @@
-"""Model: forward shapes, no-LN canonical, isinstance-based prunable selection."""
+"""Model forward shapes, no-LayerNorm default, and prunable selection."""
 import torch
 import torch.nn as nn
 

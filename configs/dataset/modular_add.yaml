@@ -1,5 +1,3 @@
-# configs/dataset/modular_add.yaml
-# =================================
 # Modular addition: (a + b) mod p.  Canonical grokking task.
 name:       "modular_add"
 p:          97

@@ -4,7 +4,7 @@ import tempfile
 from pathlib import Path
 
 from src.logging_utils import (
-    MetricLogger, summary_to_aggregate_row, write_aggregate_csv,
+    MetricLogger, summary_to_aggregate_row, write_aggregate_csv, write_run_aggregate_csv,
 )
 
 
@@ -61,3 +61,20 @@ def test_aggregate_csv_from_summary():
     out = write_aggregate_csv(rd / "aggregate.csv", [row])
     rows = _read_csv(out)
     assert "grokking_step" in rows[0] and "method" in rows[0]
+
+
+def test_parallel_aggregate_writes_distinct_seed_shards(monkeypatch):
+    rd = Path(tempfile.mkdtemp())
+    shared = rd / "aggregate.csv"
+
+    monkeypatch.setenv("GROK_SEED", "0")
+    seed_0 = write_run_aggregate_csv(shared, [{"seed": 0, "grokked": True}])
+    monkeypatch.setenv("GROK_SEED", "1")
+    seed_1 = write_run_aggregate_csv(shared, [{"seed": 1, "grokked": False}])
+
+    assert seed_0.name == "aggregate_seed_0.csv"
+    assert seed_1.name == "aggregate_seed_1.csv"
+    assert seed_0.exists() and seed_1.exists()
+    assert not shared.exists()
+    assert _read_csv(seed_0)[1][0] == "0"
+    assert _read_csv(seed_1)[1][0] == "1"

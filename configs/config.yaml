@@ -1,53 +1,51 @@
-# configs/config.yaml
-# ====================
 # Root Hydra configuration. Sub-configs are composed via the defaults list.
-# The DEFAULT composition is the CANONICAL grokking setup: a 1-layer no-LayerNorm
-# transformer trained full-batch with AdamW (weight_decay=1.0).
+# The default is a one-layer Transformer without LayerNorm, trained full-batch
+# with AdamW and weight_decay=1.0.
 #
 # Usage:
-#   python -m experiments.exp_b_lth_then_grok                       # canonical defaults
-#   python -m experiments.exp_b_lth_then_grok training.weight_decay=1e-2
-#   python -m experiments.exp_b_lth_then_grok model=transformer_2l_preln   # variant
-#   python -m experiments.exp_b_lth_then_grok dataset=modular_mul          # variant
-#   python -m experiments.exp_b_lth_then_grok logging.backend=none
+#   python experiments/exp_b_lth_then_grok.py experiment=exp_b
+#   python experiments/exp_b_lth_then_grok.py experiment=exp_b training.weight_decay=1e-2
+#   python experiments/exp_b_lth_then_grok.py experiment=exp_b model=transformer_2l_preln
+#   python experiments/exp_b_lth_then_grok.py experiment=exp_b dataset=modular_mul
+#   python experiments/exp_b_lth_then_grok.py experiment=exp_b logging.backend=none
 
 defaults:
   - dataset:    modular_add
-  - model:      transformer_1l      # CANONICAL default (1L, no LayerNorm)
-  - training:   default             # CANONICAL default (full-batch AdamW, wd=1.0)
+  - model:      transformer_1l      # one layer, no LayerNorm
+  - training:   default             # full-batch AdamW, wd=1.0
   - pruning:    imp
   - experiment: exp_b
   - _self_                          # allows root-level overrides
 
-# ── Top-level execution control ───────────────────────────────────────────────
+# Top-level execution control
 seed:        42
 num_seeds:   5          # number of independent seeds (CI plots / aggregate rows)
 results_dir: "results"
-use_amp:     false      # canonical full-batch GD runs fp32; AMP only helps mini-batch GPU
+use_amp:     false      # the default full-batch runs use fp32
 device:      "auto"     # "auto" | "cuda" | "cpu"
 
-# Expensive/fragile sharpness metric (Phase 7). Exact Hessian via HVP, OFF by default.
+# Optional top-Hessian-eigenvalue estimate using autograd HVPs.
 compute_hessian: false
 
-# ── Logging ─────────────────────────────────────────────────────────────────────
-# CSV is ALWAYS written (results/<exp>/<run>/metrics.csv, long format) plus a per-run
-# summary.json and a per-experiment aggregate.csv — so offline plots are reproducible
-# WITHOUT any external account. `backend` only selects the live VIEWER.
+# Logging
+# CSV is always written (results/<exp>/<run>/metrics.csv, long format) plus a per-run
+# summary.json and aggregate output. Parallel launcher workers write per-seed
+# aggregate shards to avoid shared-file races. `backend` only selects the viewer.
 logging:
   backend: "tensorboard"   # tensorboard (default) | csv | none | wandb
 
-# ── Weights & Biases (OPTIONAL, OFF by default) ───────────────────────────────────
-# Enable only by setting logging.backend=wandb AND wandb.enabled=true. The code never
-# logs in or reads WANDB_API_KEY for you — `wandb login` is the user's responsibility.
+# Weights & Biases (OPTIONAL, OFF by default)
+# Enable only by setting logging.backend=wandb and wandb.enabled=true. The code
+# does not log in or read WANDB_API_KEY; authentication must already be configured.
 wandb:
   enabled:   false
   project:   "grokking-lottery"
   entity:    null
   tags:      []
 
-# ── Reproducibility ───────────────────────────────────────────────────────────────
+# Reproducibility
 # Initial model weights are saved to disk at step 0; LTH rewinding loads from that
-# file (never an in-memory dict).
+# file rather than an in-memory state dictionary.
 checkpoint:
   save_init:     true
   init_filename: "init_weights.pt"
